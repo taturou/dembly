@@ -39,12 +39,37 @@ fn main() -> ExitCode {
     if argument == "validate" {
         return validate(&arguments[1..]);
     }
+    if argument == "inspect" {
+        return inspect(&arguments[1..]);
+    }
     if argument == "__runtime" {
         return runtime_command(&arguments[1..]);
     }
 
     eprintln!("dembly: command is not implemented yet");
     ExitCode::from(2)
+}
+
+fn inspect(arguments: &[String]) -> ExitCode {
+    if arguments.len() > 1 { eprintln!("dembly inspect accepts at most one deck.toml path"); return ExitCode::from(2); }
+    let current_directory = match std::env::current_dir() { Ok(path) => path, Err(error) => { eprintln!("dembly inspect: {error}"); return ExitCode::from(2); } };
+    let explicit = arguments.first().map(PathBuf::from);
+    let deck_path = match dembly_core::discover_deck(explicit.as_deref(), &current_directory) { Ok(path) => path, Err(error) => { eprintln!("dembly inspect: {error}"); return ExitCode::from(2); } };
+    let deck = match dembly_core::load_deck(&deck_path) { Ok(deck) => deck, Err(error) => { eprintln!("dembly inspect: {error}"); return ExitCode::from(2); } };
+    println!("Deck: {}", deck.name);
+    println!("Deck root: {}", deck_path.parent().unwrap_or(&deck_path).display());
+    match &deck.base {
+        dembly_core::Base::Image { image } => println!("Image Base: {image}"),
+        dembly_core::Base::Compose { compose, service } => println!("Compose Base: {compose} service={service}"),
+    }
+    let root = deck_path.parent().unwrap_or(&deck_path);
+    for reference in deck.cards {
+        match dembly_core::load_card(&root.join(reference.path)) {
+            Ok(card) => println!("Card: {} {} mount={}", card.name, card.version, card.mount.target),
+            Err(error) => { eprintln!("dembly inspect: {error}"); return ExitCode::from(2); }
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 fn runtime_command(arguments: &[String]) -> ExitCode {
