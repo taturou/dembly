@@ -60,6 +60,9 @@ fn main() -> ExitCode {
     if argument == "exec" {
         return exec_command(&arguments[1..]);
     }
+    if argument == "run" {
+        return run_command(&arguments[1..]);
+    }
     if argument == "inspect" {
         return inspect(&arguments[1..]);
     }
@@ -562,6 +565,175 @@ fn down(arguments: &[String]) -> ExitCode {
     }
     println!("stopped {name}");
     ExitCode::SUCCESS
+}
+
+fn run_command(arguments: &[String]) -> ExitCode {
+    let Some(separator) = arguments.iter().position(|argument| argument == "--") else {
+        eprintln!("dembly run requires -- <command...>");
+        return ExitCode::from(2);
+    };
+    if separator > 1 || separator + 1 == arguments.len() {
+        eprintln!("dembly run usage: dembly run [deck.toml] -- <command...>");
+        return ExitCode::from(2);
+    }
+    let current_directory = match std::env::current_dir() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly run: cannot determine current directory: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let explicit = arguments
+        .first()
+        .filter(|_| separator == 1)
+        .map(PathBuf::from);
+    let deck_path = match dembly_core::discover_deck(explicit.as_deref(), &current_directory) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly run: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let resolved = match dembly_core::resolve_deck(&deck_path, &bind_variables(&deck_path)) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly run: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let image = match &resolved.document.base {
+        dembly_core::Base::Image { image } => image,
+        dembly_core::Base::Compose { .. } => {
+            eprintln!("dembly run: Compose Base lifecycle is not implemented yet");
+            return ExitCode::from(2);
+        }
+    };
+    let image_config = match dembly_docker::inspect_image(image) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly run: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Err(error) =
+        enforce_image_lock(&resolved, &image_config.id).and_then(|_| verify_cards(&resolved))
+    {
+        eprintln!("dembly run: {error}");
+        return ExitCode::from(2);
+    }
+    let user = match runtime_user(&image_config.user) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly run: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Err(error) = create_volumes(&resolved) {
+        eprintln!("dembly run: {error}");
+        return ExitCode::from(2);
+    }
+    let persistent_state = match runtime_state(&resolved.root, &resolved.document.name) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly run: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let state = persistent_state.join(format!("run-{}", std::process::id()));
+    if let Err(error) = fs::create_dir_all(&state)
+        .and_then(|_| fs::set_permissions(&state, fs::Permissions::from_mode(0o700)))
+    {
+        eprintln!("dembly run: cannot create temporary Runtime metadata: {error}");
+        return ExitCode::from(2);
+    }
+    let runtime_config = state.join("runtime.toml");
+    let environment = planned_environment(&resolved, &image_config.environment);
+    if let Err(error) = fs::write(
+        &runtime_config,
+        render_runtime_config(&resolved, &user, &environment, &arguments[separator + 1..]),
+    ) {
+        eprintln!("dembly run: cannot write runtime metadata: {error}");
+        let _ = fs::remove_dir_all(&state);
+        return ExitCode::from(2);
+    }
+    let executable = match std::env::current_exe() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly run: cannot resolve current executable: {error}");
+            let _ = fs::remove_dir_all(&state);
+            return ExitCode::from(2);
+        }
+    };
+    let name = format!(
+        "dembly-{}-run-{}",
+        resolved.document.name,
+        std::process::id()
+    );
+    let cards = resolved
+        .cards
+        .iter()
+        .map(|card| dembly_docker::CardFileBind {
+            name: card.document.name.clone(),
+            source: card
+                .manifest_path
+                .parent()
+                .unwrap()
+                .join(&card.document.filesystem.file),
+        })
+        .collect();
+    let mut extra_mounts = resolved
+        .volumes
+        .iter()
+        .map(|volume| {
+            (
+                volume.source.clone(),
+                volume.target.to_string_lossy().into_owned(),
+                false,
+            )
+        })
+        .collect::<Vec<_>>();
+    extra_mounts.extend(resolved.binds.iter().map(|bind| {
+        (
+            bind.source.clone(),
+            bind.target.to_string_lossy().into_owned(),
+            bind.mode == "ro",
+        )
+    }));
+    let plan = dembly_docker::ImageRuntimePlan {
+        image: image.clone(),
+        container_name: name.clone(),
+        executable,
+        runtime_config,
+        cards,
+        labels: managed_labels(&resolved.document.name),
+        extra_mounts,
+    };
+    let result = match dembly_docker::run_docker(&dembly_docker::image_create_command(&plan)) {
+        Ok(status) if status.success() => {
+            match dembly_docker::docker_status(&["start", "-a", &name]) {
+                Ok(status) => status.code().unwrap_or(2),
+                Err(error) => {
+                    eprintln!("dembly run: {error}");
+                    2
+                }
+            }
+        }
+        Ok(status) => {
+            eprintln!("dembly run: Docker create failed with status {status}");
+            2
+        }
+        Err(error) => {
+            eprintln!("dembly run: {error}");
+            2
+        }
+    };
+    if let Err(error) = dembly_docker::docker_status(&["rm", "-f", &name]) {
+        eprintln!("dembly run: temporary Runtime cleanup failed: {error}");
+    }
+    if let Err(error) = fs::remove_dir_all(&state) {
+        eprintln!("dembly run: temporary metadata cleanup failed: {error}");
+    }
+    ExitCode::from(result as u8)
 }
 
 fn exec_command(arguments: &[String]) -> ExitCode {
