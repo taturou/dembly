@@ -23,6 +23,7 @@
 | REQ-CMP-020 to REQ-CMP-034 | `up_compose`, `down_compose`, `run_compose`, `exec_compose`, `check_compose`, `compose_base_runs_a_temporary_command_and_cleans_up` | Basic `run`、`up`、`exec`、`down`、`check` lifecycle と effective command override を Docker integration verified |
 | REQ-USR-001 to REQ-USR-007 | `runtime_probe`, `probe_image_user`, `runtime_user` | Unit tested; basic Image/Compose Runtime integration verified |
 | REQ-RUN-010 to REQ-RUN-011 | `runtime_command`, `create_exports`, `run_hooks`, `image_base_card_runs_without_host_squashfs_mount` | Image Runtime の SquashFS mount、export、post-mount hook integration verified |
+| REQ-CHK-003 to REQ-CHK-006 | `image_base_card_runs_without_host_squashfs_mount` | Image Runtime で Card check の実行と failure propagation を integration verified |
 | IT-001, IT-003, IT-007, IT-027, IT-029, IT-030, IT-033 | `image_base_card_runs_without_host_squashfs_mount` | Verified by `cargo test --workspace` on this Docker/SquashFS host |
 | IT-002, IT-004 to IT-006, IT-008 to IT-026, IT-028, IT-031 to IT-040 | Not implemented | Unverified |
 | REQ-DOD-006 to REQ-DOD-016 | lifecycle implementation exists; integration acceptance coverage remains incomplete | Partially verified |
