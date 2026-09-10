@@ -102,6 +102,17 @@ fn image_base_card_runs_without_host_squashfs_mount() {
         .output()
         .unwrap();
     assert!(!failed_check.status.success());
+    let filesystem_path = root.join("cards/hello/rootfs.squashfs");
+    let mut filesystem = fs::read(&filesystem_path).unwrap();
+    filesystem.push(0);
+    fs::write(&filesystem_path, filesystem).unwrap();
+    let tampered_run = Command::new(&binary)
+        .current_dir(&root)
+        .args(["run", "--", "/bin/true"])
+        .output()
+        .unwrap();
+    assert!(!tampered_run.status.success());
+    assert!(String::from_utf8_lossy(&tampered_run.stderr).contains("checksum"));
     let host_mounts = fs::read_to_string("/proc/self/mountinfo").unwrap();
     assert!(!host_mounts.contains("/opt/dembly/cards/hello"));
     let _ = Command::new("docker")
