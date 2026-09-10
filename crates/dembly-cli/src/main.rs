@@ -66,6 +66,10 @@ fn runtime_command(arguments: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     }
+    if let Err(error) = drop_privileges(config.runtime_user.uid, config.runtime_user.gid) {
+        eprintln!("dembly runtime: {error}");
+        return ExitCode::from(2);
+    }
     let Some(program) = config.process_argv.first() else {
         eprintln!("dembly runtime: process argv must not be empty");
         return ExitCode::from(2);
@@ -80,6 +84,21 @@ unsafe fn libc_geteuid() -> u32 {
     // SAFETY: geteuid has no arguments, no memory ownership contract, and is available on Linux.
     extern "C" { fn geteuid() -> u32; }
     unsafe { geteuid() }
+}
+
+fn drop_privileges(uid: u32, gid: u32) -> Result<(), String> {
+    // SAFETY: setgid/setuid receive plain numeric IDs parsed from host-generated runtime.toml.
+    // This runs only after the root-only mount phase and immediately before exec.
+    extern "C" {
+        fn setgid(gid: u32) -> i32;
+        fn setuid(uid: u32) -> i32;
+    }
+    // SAFETY: both functions have no pointer arguments. A non-zero return is converted to an error.
+    unsafe {
+        if setgid(gid) != 0 { return Err(format!("cannot set GID to {gid}")); }
+        if setuid(uid) != 0 { return Err(format!("cannot set UID to {uid}")); }
+    }
+    Ok(())
 }
 
 fn validate(arguments: &[String]) -> ExitCode {
