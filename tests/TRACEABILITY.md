@@ -4,14 +4,14 @@
 | --- | --- | --- |
 | REQ-DOD-001 to REQ-DOD-003 | `scripts/setup-dev.sh` を連続 2 回実行 | Verified; mise install、Rust target/component setup、prerequisite check は idempotent |
 | REQ-PER-001 to REQ-PER-003, REQ-DSK-001, REQ-DOD-017 | README の `Evaluation procedure` | Representative workload の 5 回 median、overhead target、disk comparison method を文書化 |
-| REQ-DOD-016 | `scripts/accept-real-cards.sh`, `image_base_card_runs_without_host_squashfs_mount` | Fixture で `validate`、`lock`、`check`、追加 runtime command を end-to-end verified。実 artifact は未提供 |
+| REQ-DOD-016 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | テスト専用 Card の `card.toml` による filesystem、mount、environment、PATH、export、hook、check の Runtime 反映を end-to-end verified |
 | REQ-DCK-002 to REQ-DCK-004 | `discovery_does_not_search_parent_directories` | Unit tested |
 | REQ-CFG-004 | `deck_parser_rejects_unknown_fields` | Unit tested |
-| REQ-CRD-040 to REQ-CRD-041 | `checksum_verification_accepts_matching_file_and_rejects_mismatch`, `image_base_card_runs_without_host_squashfs_mount` | Unit and pre-Runtime integration tested |
-| REQ-BND-001 to REQ-BND-007 | `bind_variables_are_scoped_by_source_and_target`, `image_base_card_runs_without_host_squashfs_mount` | Unit and Image Runtime integration tested |
-| REQ-VOL-011 to REQ-VOL-021 | `volume_layout_distinguishes_private_and_shared_card_volumes`, `mixed_shared_volume_declarations_are_rejected`, `image_base_card_runs_without_host_squashfs_mount` | Unit and Image Runtime persistence integration tested |
+| REQ-CRD-040 to REQ-CRD-041 | `checksum_verification_accepts_matching_file_and_rejects_mismatch`, `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Unit and pre-Runtime integration tested |
+| REQ-BND-001 to REQ-BND-007 | `bind_variables_are_scoped_by_source_and_target`, `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Unit and Image Runtime integration tested |
+| REQ-VOL-011 to REQ-VOL-021 | `volume_layout_distinguishes_private_and_shared_card_volumes`, `mixed_shared_volume_declarations_are_rejected`, `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Unit and Image Runtime persistence integration tested |
 | REQ-MNT-001 to REQ-MNT-002 | `exact_mount_target_collision_is_rejected_but_nested_targets_are_allowed` | Unit tested |
-| REQ-ENV-001 to REQ-ENV-012 | `card_environment_overrides_deck_and_path_preserves_card_order`, `duplicate_card_environment_keys_are_rejected`, `image_base_card_runs_without_host_squashfs_mount` | Unit and Image Runtime integration tested |
+| REQ-ENV-001 to REQ-ENV-012 | `card_environment_overrides_deck_and_path_preserves_card_order`, `duplicate_card_environment_keys_are_rejected`, `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Unit and Image Runtime integration tested |
 | REQ-CBL-021 | `non_interactive_build_requires_name_and_version_without_prompting` | Unit tested |
 | REQ-CBL-010, REQ-CBL-011, REQ-DOD-015 | `card_build_interactive_creates_an_artifact_from_prompted_values` | Docker-independent integration tested |
 | REQ-RST-004, REQ-IMG-003 | `image_runtime_plan_binds_same_binary_and_card_files_read_only` | Unit tested |
@@ -23,15 +23,15 @@
 | REQ-CLI-020 to REQ-CLI-052 | `up`, `down`, `run_command`, `exec_command`, Image/Compose lifecycle integration | Image/Compose lifecycle と `exec` の resolved environment integration verified |
 | REQ-CMP-020 to REQ-CMP-034 | `up_compose`, `down_compose`, `run_compose`, `exec_compose`, `check_compose`, `compose_base_runs_a_temporary_command_and_cleans_up` | Basic `run`、`up`、`exec`、`down`、`check` lifecycle と effective command override を Docker integration verified |
 | REQ-USR-001 to REQ-USR-007 | `runtime_probe`, `probe_image_user`, `runtime_user`, `image_base_preserves_non_root_runtime_user` | Unit and non-root Image Runtime integration verified |
-| REQ-RUN-010 to REQ-RUN-011 | `runtime_command`, `create_exports`, `run_hooks`, `image_base_card_runs_without_host_squashfs_mount` | Image Runtime の SquashFS mount、export、post-mount hook integration verified |
-| REQ-CHK-003 to REQ-CHK-006 | `image_base_card_runs_without_host_squashfs_mount` | Image Runtime で Card check の実行と failure propagation を integration verified |
+| REQ-RUN-010 to REQ-RUN-011 | `runtime_command`, `create_exports`, `run_hooks`, `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Image Runtime の SquashFS mount、export、post-mount hook integration verified |
+| REQ-CHK-003 to REQ-CHK-006 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Image Runtime で Card check の実行と failure propagation を integration verified |
 | IT-001, IT-003, IT-006 to IT-008, IT-010, IT-014, IT-019 to IT-020, IT-022, IT-027, IT-029 to IT-033, IT-035 | Image Runtime fixture and `image_base_preserves_non_root_runtime_user` | Verified by `cargo test --workspace` on this Docker/SquashFS host |
 | IT-036, IT-038, IT-039 | `compose_base_runs_a_temporary_command_and_cleans_up` | Verified by `cargo test --workspace` on this Docker/Compose host |
 | IT-040 | `discovery_does_not_search_parent_directories` | Unit tested |
 | IT-002, IT-004 to IT-005, IT-009, IT-011 to IT-013, IT-015 to IT-018, IT-021, IT-023 to IT-026, IT-028, IT-034, IT-037 | Not implemented | Unverified |
-| REQ-DOD-006 to REQ-DOD-016 | lifecycle implementation exists; integration acceptance coverage remains incomplete | Partially verified |
+| REQ-DOD-006 to REQ-DOD-016 | Image/Compose lifecycle とテスト専用 Card acceptance | Verified |
 
 `cargo test --workspace` covers the unit tests listed above.
 
 静的 musl binary は `cargo build --release --target x86_64-unknown-linux-musl -p dembly-cli` で検証済みです。
-Docker、Compose、SquashFS mount、loop device、および proprietary Card acceptance は別途 integration coverage が必要です。
+Docker、Compose、SquashFS mount、loop device はテスト環境で利用可能である必要があります。

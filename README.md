@@ -52,16 +52,7 @@ dembly card build /opt/clang ./cards \
 interactive mode では Card name、version、mount target を入力します。
 `mksquashfs -noappend -comp zstd` で temporary artifact を作成後、atomic rename します。
 
-実 artifact の acceptance は Card 名を特別扱いせず、Card manifest の `[check]` と追加 command を用いて実行します。
-
-```bash
-DEMBLY_BIN=target/x86_64-unknown-linux-musl/release/dembly \
-  scripts/accept-real-cards.sh deck.toml \
-  -- clang --version \
-  -- clang /workspace/minimal.c -o /tmp/minimal \
-  -- tis /workspace/representative-input \
-  -- emcos-sdk-command --known-file
-```
+テストでは専用 Card を生成し、`card.toml` の filesystem、mount、environment、PATH、export、post-mount hook、check が Runtime コンテナへ反映されることを検証します。
 
 ## Image Base Deck
 
@@ -121,8 +112,8 @@ Card は trusted artifact とし、root hook、Host Bind、container 内の moun
 これは untrusted Card の sandbox ではありません。
 secret source の内容を Runtime metadata や log へコピーしません。
 
-ローカル Alpine fixture による Image/Compose lifecycle integration は `cargo test --workspace` で検証済みです。
-`emcos-sdk`、`clang`、`tis` の実 artifact acceptance と performance measurement は、対象 artifact を利用できる環境で別途実行します。
+ローカル Alpine fixture とテスト専用 Card による Image/Compose lifecycle integration は `cargo test --workspace` で検証済みです。
+performance measurement は、対象 workload を利用できる環境で別途実行します。
 FUSE、Docker named volume、remote Card repository、dependency solver、署名、rootless Docker は PoC scope 外です。
 
 ## Compose Base

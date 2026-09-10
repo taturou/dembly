@@ -1315,23 +1315,10 @@ Card は `[check]` を持ってよい。
 ### REQ-CHK-006 [Event-driven][SHOULD]
 複数 Card を check するとき、Dembly は可能な限り全 Card の結果を表示した後に non-zero を返すことを推奨する。
 
-初期実 Card acceptance:
+テスト専用 Card acceptance:
 
-#### clang
-
-- `clang --version`
-- 最小 C source の compile
-- 可能なら link / run
-
-#### tis
-
-- TIS version/basic command
-- 最小 representative analysis input を 1 件解析
-
-#### emcos-sdk
-
-- representative SDK command または既知 file access
-- 可能なら最小 eMCOS build
+- テスト専用 Card の `card.toml` は、filesystem、mount target、environment、environment path、export、post-mount hook、check を宣言する。
+- integration test は、その Card を含む Deck を Runtime 化し、各宣言が Runtime コンテナ内で有効であることを確認する。
 
 ---
 
@@ -2337,7 +2324,7 @@ Codex は原則として以下の順序で実装する。
 14. `check`
 15. Compose Base override integration
 16. integration tests
-17. real Card acceptance
+17. test Card acceptance
 18. performance / disk evaluation documentation
 
 ### REQ-IMP-001 [Ubiquitous][MUST]
@@ -2450,7 +2437,7 @@ Host Bind variable expansion は本仕様どおり動作しなければならな
 `dembly card build` は interactive と non-interactive の双方で動作しなければならない。
 
 ### REQ-DOD-016 [Ubiquitous][MUST]
-real artifact が利用可能な環境では、`emcos-sdk`、`clang`、`tis` Card の representative acceptance test が実行できなければならない。
+テスト専用 Card を使用し、`card.toml` が指定する filesystem、mount target、environment、environment path、export、post-mount hook、check が Runtime コンテナへ反映されることを integration test で確認しなければならない。
 
 ### REQ-DOD-017 [Ubiquitous][MUST]
 representative performance measurement method と結果記録方法が文書化されなければならない。
@@ -2461,7 +2448,7 @@ representative performance measurement method と結果記録方法が文書化�
 
 ### REQ-ACC-001 [Ubiquitous][MUST]
 
-Dembly PoC は、**同一の unchanged Base と事前ビルド済み immutable Card を使用し、Base を Card 構成ごとに再ビルドせずに異なる Card combination を選択でき、Card file を read-only で Runtime へ渡し、各 SquashFS を Runtime 内だけで kernel mount し、通常の Linux filesystem / process semantics で Card tool を実行し、Deck root 配下に宣言済み persistent state を保持し、eMCOS / Clang / TIS の representative workload を実用性能で実行できなければならない。**
+Dembly PoC は、**同一の unchanged Base と事前ビルド済み immutable Card を使用し、Base を Card 構成ごとに再ビルドせずに異なる Card combination を選択でき、Card file を read-only で Runtime へ渡し、各 SquashFS を Runtime 内だけで kernel mount し、通常の Linux filesystem / process semantics で Card tool を実行し、Deck root 配下に宣言済み persistent state を保持し、テスト専用 Card の `card.toml` 宣言を Runtime コンテナで検証できなければならない。**
 
 ---
 

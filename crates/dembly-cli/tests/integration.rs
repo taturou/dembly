@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static TEMPORARY_DIRECTORY_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
-fn image_base_card_runs_without_host_squashfs_mount() {
+fn image_base_applies_test_card_manifest_without_host_squashfs_mount() {
     let root = temporary_directory();
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let fixture = repository.join("tests/fixtures/hello-card/rootfs");
@@ -52,10 +52,9 @@ fn image_base_card_runs_without_host_squashfs_mount() {
     fs::create_dir_all(root.join("host-rw")).unwrap();
     fs::write(root.join("deck.toml"), format!("schema_version = 1\nname = \"fixture-{}\"\n[base]\nimage = \"{tag}\"\n[[cards]]\npath = \"cards/hello/card.toml\"\n[[volumes]]\nname = \"cache\"\ntarget = \"/work/cache\"\n[[binds]]\nsource = \"${{DECK_ROOT}}/host-input\"\ntarget = \"/work/input\"\nmode = \"ro\"\n[[binds]]\nsource = \"${{DECK_ROOT}}/host-rw\"\ntarget = \"/work/rw\"\nmode = \"rw\"\n", std::process::id())).unwrap();
 
-    let acceptance = Command::new(repository.join("scripts/accept-real-cards.sh"))
-        .env("DEMBLY_BIN", &binary)
-        .arg(root.join("deck.toml"))
-        .args(["--", "/usr/local/bin/hello"])
+    let acceptance = Command::new(&binary)
+        .current_dir(&root)
+        .arg("validate")
         .output()
         .unwrap();
     assert!(
@@ -63,6 +62,11 @@ fn image_base_card_runs_without_host_squashfs_mount() {
         "{}",
         String::from_utf8_lossy(&acceptance.stderr)
     );
+    run(Command::new(&binary).current_dir(&root).arg("lock"));
+    run(Command::new(&binary).current_dir(&root).arg("check"));
+    run(Command::new(&binary)
+        .current_dir(&root)
+        .args(["run", "--", "/usr/local/bin/hello"]));
     let output = Command::new(&binary)
         .current_dir(&root)
         .args(["run", "--", "/usr/local/bin/hello"])
