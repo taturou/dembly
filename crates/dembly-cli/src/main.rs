@@ -1154,6 +1154,15 @@ fn exec_command(arguments: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if let dembly_core::Base::Compose { compose, service } = &deck.base {
+        return exec_compose(
+            &deck_path,
+            &deck.name,
+            compose,
+            service,
+            &arguments[separator + 1..],
+        );
+    }
     let name = format!("dembly-{}", deck.name);
     if dembly_docker::container_label(&name, "io.dembly.managed").as_deref() != Ok("true")
         || dembly_docker::container_label(&name, "io.dembly.deck").as_deref()
@@ -1181,6 +1190,67 @@ fn exec_command(arguments: &[String]) -> ExitCode {
     };
     let user = format!("{}:{}", config.runtime_user.uid, config.runtime_user.gid);
     match dembly_docker::exec_in_container(&name, &user, &arguments[separator + 1..]) {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => ExitCode::from(status.code().unwrap_or(2) as u8),
+        Err(error) => {
+            eprintln!("dembly exec: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn exec_compose(
+    deck_path: &std::path::Path,
+    deck_name: &str,
+    compose: &str,
+    service: &str,
+    argv: &[String],
+) -> ExitCode {
+    let root = deck_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let state = match runtime_state(root, deck_name) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly exec: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let override_path = state.join("compose.override.yaml");
+    if !override_path.is_file() {
+        eprintln!("dembly exec: Runtime is not running: dembly-{deck_name}");
+        return ExitCode::from(2);
+    }
+    let common = vec![
+        OsString::from("-p"),
+        OsString::from(format!("dembly-{deck_name}")),
+        OsString::from("-f"),
+        root.join(compose).into_os_string(),
+        OsString::from("-f"),
+        override_path.into_os_string(),
+    ];
+    let container = match dembly_docker::compose_service_container(&common, service) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly exec: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if dembly_docker::container_label(&container, "io.dembly.managed").as_deref() != Ok("true")
+        || dembly_docker::container_label(&container, "io.dembly.deck").as_deref() != Ok(deck_name)
+    {
+        eprintln!("dembly exec: Runtime ownership label verification failed: {container}");
+        return ExitCode::from(2);
+    }
+    let config = match dembly_runtime::load_runtime_config(&state.join("runtime.toml")) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly exec: cannot read runtime metadata: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let user = format!("{}:{}", config.runtime_user.uid, config.runtime_user.gid);
+    match dembly_docker::exec_in_container(&container, &user, argv) {
         Ok(status) if status.success() => ExitCode::SUCCESS,
         Ok(status) => ExitCode::from(status.code().unwrap_or(2) as u8),
         Err(error) => {
