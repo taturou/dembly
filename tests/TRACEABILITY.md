@@ -6,7 +6,7 @@
 | REQ-PER-001 to REQ-PER-003, REQ-DSK-001, REQ-DOD-017 | README の `Evaluation procedure` | Representative workload の 5 回 median、overhead target、disk comparison method を文書化 |
 | REQ-DCK-002 to REQ-DCK-004 | `discovery_does_not_search_parent_directories` | Unit tested |
 | REQ-CFG-004 | `deck_parser_rejects_unknown_fields` | Unit tested |
-| REQ-CRD-040 to REQ-CRD-041 | `checksum_verification_accepts_matching_file_and_rejects_mismatch` | Unit tested |
+| REQ-CRD-040 to REQ-CRD-041 | `checksum_verification_accepts_matching_file_and_rejects_mismatch`, `image_base_card_runs_without_host_squashfs_mount` | Unit and pre-Runtime integration tested |
 | REQ-BND-001 to REQ-BND-007 | `bind_variables_are_scoped_by_source_and_target`, `image_base_card_runs_without_host_squashfs_mount` | Unit and Image Runtime integration tested |
 | REQ-VOL-011 to REQ-VOL-021 | `volume_layout_distinguishes_private_and_shared_card_volumes`, `mixed_shared_volume_declarations_are_rejected`, `image_base_card_runs_without_host_squashfs_mount` | Unit and Image Runtime persistence integration tested |
 | REQ-MNT-001 to REQ-MNT-002 | `exact_mount_target_collision_is_rejected_but_nested_targets_are_allowed` | Unit tested |
