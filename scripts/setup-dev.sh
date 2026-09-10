@@ -12,7 +12,9 @@ if ! command -v mise >/dev/null 2>&1; then
 fi
 
 cd -- "$repo_root"
-mise install
+source "$repo_root/scripts/mise-proxy-bypass.sh"
+configure_mise_no_proxy
+mise run install
 mise exec -- rustup target add x86_64-unknown-linux-musl
 mise exec -- rustup component add rustfmt clippy
 "$repo_root/scripts/check-linux.sh"

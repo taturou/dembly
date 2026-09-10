@@ -1,2 +1,10 @@
 [tools]
 "rust" = "1.85.1"
+
+[tasks.install]
+description = "Install project-managed tools with proxy bypasses"
+run = "bash scripts/mise-install.sh"
+
+[tasks.upgrade]
+description = "Upgrade project-managed tools with proxy bypasses"
+run = "bash scripts/mise-upgrade.sh"
