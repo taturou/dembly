@@ -9,4 +9,5 @@
 
 - Use Conventional Commits. Write the title in English and the body in Japanese.
 - In the body, concisely state why the change was made and what changed.
+- Separate the title and body with actual line breaks; do not write escaped newlines as literal characters.
 - Limit each commit to one purpose.
