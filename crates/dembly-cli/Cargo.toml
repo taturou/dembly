@@ -10,3 +10,4 @@ name = "dembly"
 path = "src/main.rs"
 
 [dependencies]
+dembly-card = { path = "../dembly-card" }
