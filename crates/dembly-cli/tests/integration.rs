@@ -78,7 +78,7 @@ fn compose_base_runs_a_temporary_command_and_cleans_up() {
     ]));
     fs::write(
         root.join("compose.yaml"),
-        "services:\n  dev:\n    image: alpine:3.21\n    command: [\\\"sleep\\\", \\\"infinity\\\"]\n",
+        "services:\n  dev:\n    image: alpine:3.21\n    command: [\"sleep\", \"infinity\"]\n",
     )
     .unwrap();
     fs::write(
@@ -101,6 +101,29 @@ fn compose_base_runs_a_temporary_command_and_cleans_up() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("compose-runtime"));
+    run(Command::new(&binary).current_dir(&root).arg("up"));
+    let output = Command::new(&binary)
+        .current_dir(&root)
+        .args(["exec", "--", "/bin/echo", "compose-exec"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "compose-exec"
+    );
+    run(Command::new(&binary).current_dir(&root).arg("down"));
+    fs::write(
+        root.join("compose.yaml"),
+        "services:\n  dev:\n    image: alpine:3.21\n    command: [\"/bin/true\"]\n",
+    )
+    .unwrap();
+    run(Command::new(&binary).current_dir(&root).arg("lock"));
+    run(Command::new(&binary).current_dir(&root).arg("check"));
     let project = format!("dembly-{deck_name}");
     let containers = Command::new("docker")
         .args(["compose", "-p", &project, "-f"])
