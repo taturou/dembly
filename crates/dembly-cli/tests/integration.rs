@@ -44,7 +44,7 @@ fn image_base_card_runs_without_host_squashfs_mount() {
     fs::write(
         &manifest_path,
         format!(
-            "{manifest}\n[environment]\nHELLO_ENV = \"enabled\"\n\n[[exports]]\nsource = \"bin/hello\"\ntarget = \"/usr/local/bin/hello\"\n\n[[hooks.post_mount]]\nexec = \"setup/post-mount.sh\"\n"
+            "{manifest}\n[environment]\nHELLO_ENV = \"enabled\"\n\n[[exports]]\nsource = \"bin/hello\"\ntarget = \"/usr/local/bin/hello\"\n\n[[hooks.post_mount]]\nexec = \"setup/post-mount.sh\"\n\n[check]\nexec = \"bin/hello\"\n"
         ),
     )
     .unwrap();
@@ -74,10 +74,34 @@ fn image_base_card_runs_without_host_squashfs_mount() {
         "{}",
         String::from_utf8_lossy(&second_output.stderr)
     );
+    let check_output = Command::new(&binary)
+        .current_dir(&root)
+        .arg("check")
+        .output()
+        .unwrap();
+    assert!(
+        check_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check_output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&check_output.stdout).contains("check hello"));
     assert_eq!(
         fs::read_to_string(root.join("volumes/cache/result")).unwrap(),
-        "persisted\npersisted\n"
+        "persisted\npersisted\npersisted\n"
     );
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    fs::write(
+        &manifest_path,
+        manifest.replace("exec = \"bin/hello\"", "exec = \"bin/missing\""),
+    )
+    .unwrap();
+    run(Command::new(&binary).current_dir(&root).arg("lock"));
+    let failed_check = Command::new(&binary)
+        .current_dir(&root)
+        .arg("check")
+        .output()
+        .unwrap();
+    assert!(!failed_check.status.success());
     let host_mounts = fs::read_to_string("/proc/self/mountinfo").unwrap();
     assert!(!host_mounts.contains("/opt/dembly/cards/hello"));
     let _ = Command::new("docker")
