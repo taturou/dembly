@@ -135,6 +135,19 @@ fn runtime_command(arguments: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     }
+    if let Err(error) = dembly_runtime::ensure_mount_targets_exist(&config.cards) {
+        eprintln!("dembly runtime: {error}");
+        return ExitCode::from(2);
+    }
+    if let Err(error) = dembly_runtime::create_exports(&config.exports) {
+        eprintln!("dembly runtime: {error}");
+        return ExitCode::from(2);
+    }
+    if let Err(error) = dembly_runtime::run_hooks(&config.hooks, &config.cards, &config.environment)
+    {
+        eprintln!("dembly runtime: {error}");
+        return ExitCode::from(2);
+    }
     if let Err(error) = drop_privileges(config.runtime_user.uid, config.runtime_user.gid) {
         eprintln!("dembly runtime: {error}");
         return ExitCode::from(2);
@@ -145,6 +158,7 @@ fn runtime_command(arguments: &[String]) -> ExitCode {
     };
     let error = std::process::Command::new(program)
         .args(&config.process_argv[1..])
+        .envs(&config.environment)
         .exec();
     eprintln!("dembly runtime: cannot exec {program}: {error}");
     ExitCode::from(2)
