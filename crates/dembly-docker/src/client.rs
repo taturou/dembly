@@ -138,6 +138,33 @@ pub fn compose_status(
         .map_err(|error| format!("cannot execute docker compose: {error}"))
 }
 
+pub fn compose_service_container(
+    arguments: &[std::ffi::OsString],
+    service: &str,
+) -> Result<String, String> {
+    let output = Command::new("docker")
+        .arg("compose")
+        .args(arguments)
+        .args(["ps", "-q", service])
+        .output()
+        .map_err(|error| format!("cannot execute docker compose ps: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot resolve Compose Runtime service {service}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let id = String::from_utf8(output.stdout)
+        .map_err(|_| "docker compose ps emitted non-UTF-8 output".to_owned())?
+        .trim()
+        .to_owned();
+    if id.is_empty() {
+        Err(format!("Compose Runtime service is not running: {service}"))
+    } else {
+        Ok(id)
+    }
+}
+
 fn inspect_lines(reference: &str, template: &str) -> Result<Vec<String>, String> {
     let output = Command::new("docker")
         .args(["image", "inspect", "--format", template, reference])

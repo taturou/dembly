@@ -694,9 +694,8 @@ fn down(arguments: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if !matches!(deck.base, dembly_core::Base::Image { .. }) {
-        eprintln!("dembly down: Compose Base lifecycle is not implemented yet");
-        return ExitCode::from(2);
+    if let dembly_core::Base::Compose { compose, service } = &deck.base {
+        return down_compose(&deck_path, &deck.name, compose, service);
     }
     let name = format!("dembly-{}", deck.name);
     let managed = dembly_docker::container_label(&name, "io.dembly.managed");
@@ -729,6 +728,77 @@ fn down(arguments: &[String]) -> ExitCode {
         }
     }
     println!("stopped {name}");
+    ExitCode::SUCCESS
+}
+
+fn down_compose(
+    deck_path: &std::path::Path,
+    deck_name: &str,
+    compose: &str,
+    service: &str,
+) -> ExitCode {
+    let root = deck_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let state = match runtime_state(root, deck_name) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly down: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let compose_path = root.join(compose);
+    let override_path = state.join("compose.override.yaml");
+    if !override_path.is_file() {
+        eprintln!(
+            "dembly down: missing Compose Runtime metadata: {}",
+            override_path.display()
+        );
+        return ExitCode::from(2);
+    }
+    let project = format!("dembly-{deck_name}");
+    let common = vec![
+        OsString::from("-p"),
+        OsString::from(&project),
+        OsString::from("-f"),
+        compose_path.into_os_string(),
+        OsString::from("-f"),
+        override_path.clone().into_os_string(),
+    ];
+    let container = match dembly_docker::compose_service_container(&common, service) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly down: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if dembly_docker::container_label(&container, "io.dembly.managed").as_deref() != Ok("true")
+        || dembly_docker::container_label(&container, "io.dembly.deck").as_deref() != Ok(deck_name)
+    {
+        eprintln!("dembly down: Runtime ownership label verification failed: {container}");
+        return ExitCode::from(2);
+    }
+    let mut command = common;
+    command.push(OsString::from("down"));
+    match dembly_docker::compose_status(&command) {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            eprintln!("dembly down: docker compose down failed with status {status}");
+            return ExitCode::from(2);
+        }
+        Err(error) => {
+            eprintln!("dembly down: {error}");
+            return ExitCode::from(2);
+        }
+    }
+    if let Err(error) = fs::remove_dir_all(&state) {
+        eprintln!(
+            "dembly down: cannot remove Runtime metadata {}: {error}",
+            state.display()
+        );
+        return ExitCode::from(2);
+    }
+    println!("stopped {project}");
     ExitCode::SUCCESS
 }
 
