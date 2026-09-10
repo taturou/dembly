@@ -12,6 +12,20 @@ fn public_help_lists_validate_without_internal_runtime_namespace() {
 }
 
 #[test]
+fn internal_runtime_probe_resolves_root_from_passwd() {
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_dembly"))
+        .args(["__runtime", "probe", "root"])
+        .output()
+        .expect("dembly should start");
+    let output = String::from_utf8(result.stdout).expect("probe output should be UTF-8");
+    let fields = output.trim().split('\t').collect::<Vec<_>>();
+    assert!(result.status.success());
+    assert_eq!(fields.len(), 4);
+    assert_eq!(fields[0], "root");
+    assert_eq!(fields[2], "0");
+}
+
+#[test]
 fn card_build_non_interactive_rejects_missing_required_options() {
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_dembly"))
         .args(["card", "build", "/tool", "/cards", "--non-interactive"])
