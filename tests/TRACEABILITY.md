@@ -3,6 +3,7 @@
 | Requirement | Evidence | Status |
 | --- | --- | --- |
 | REQ-DOD-001 to REQ-DOD-003 | `scripts/setup-dev.sh` を連続 2 回実行 | Verified; mise install、Rust target/component setup、prerequisite check は idempotent |
+| REQ-PER-001 to REQ-PER-003, REQ-DSK-001, REQ-DOD-017 | README の `Evaluation procedure` | Representative workload の 5 回 median、overhead target、disk comparison method を文書化 |
 | REQ-DCK-002 to REQ-DCK-004 | `discovery_does_not_search_parent_directories` | Unit tested |
 | REQ-CFG-004 | `deck_parser_rejects_unknown_fields` | Unit tested |
 | REQ-CRD-040 to REQ-CRD-041 | `checksum_verification_accepts_matching_file_and_rejects_mismatch` | Unit tested |
