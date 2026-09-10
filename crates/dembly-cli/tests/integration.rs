@@ -1,0 +1,76 @@
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
+
+#[test]
+#[ignore = "requires Docker registry access, Docker daemon, SquashFS, loop device, and musl target"]
+fn image_base_card_runs_without_host_squashfs_mount() {
+    let root = temporary_directory();
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fixture = repository.join("tests/fixtures/hello-card/rootfs");
+    let image_dockerfile = repository.join("tests/fixtures/image-base");
+    let tag = format!("dembly-fixture-{}", std::process::id());
+    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+
+    run(Command::new("cargo").current_dir(&repository).args([
+        "build",
+        "--release",
+        "--target",
+        "x86_64-unknown-linux-musl",
+        "-p",
+        "dembly-cli",
+    ]));
+    run(Command::new("docker").args(["build", "-t", &tag, image_dockerfile.to_str().unwrap()]));
+    run(Command::new(&binary).args([
+        "card",
+        "build",
+        fixture.to_str().unwrap(),
+        root.join("cards").to_str().unwrap(),
+        "--name",
+        "hello",
+        "--version",
+        "1",
+        "--mount-target",
+        "/opt/dembly/cards/hello",
+        "--path-prepend",
+        "bin",
+        "--non-interactive",
+    ]));
+    fs::write(root.join("deck.toml"), format!("schema_version = 1\nname = \"fixture-{}\"\n[base]\nimage = \"{tag}\"\n[[cards]]\npath = \"cards/hello/card.toml\"\n", std::process::id())).unwrap();
+
+    run(Command::new(&binary).current_dir(&root).arg("validate"));
+    run(Command::new(&binary).current_dir(&root).arg("lock"));
+    let output = Command::new(&binary)
+        .current_dir(&root)
+        .args(["run", "--", "hello"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello-card");
+    let host_mounts = fs::read_to_string("/proc/self/mountinfo").unwrap();
+    assert!(!host_mounts.contains("/opt/dembly/cards/hello"));
+    let _ = Command::new("docker")
+        .args(["image", "rm", "-f", &tag])
+        .status();
+    let _ = fs::remove_dir_all(root);
+}
+
+fn temporary_directory() -> PathBuf {
+    let path = std::env::temp_dir().join(format!("dembly-integration-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn run(command: &mut Command) {
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

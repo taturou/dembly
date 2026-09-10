@@ -15,7 +15,8 @@
 | REQ-CMP-010 to REQ-CMP-011 | `compose_override_changes_only_selected_service_with_internal_entrypoint` | Unit tested |
 | REQ-CLI-001 | `validate_checks_card_manifest_and_filesystem_from_deck_root` | Unit tested |
 | REQ-CLI-060 | `inspect_displays_deck_name_base_and_card_without_runtime` | Unit tested |
-| IT-001 to IT-040 | Not implemented | Unverified |
+| IT-001, IT-003, IT-007, IT-027, IT-029, IT-030, IT-033 | `image_base_card_runs_without_host_squashfs_mount` | Implemented, ignored pending Docker/SquashFS prerequisites |
+| IT-002, IT-004 to IT-006, IT-008 to IT-026, IT-028, IT-031 to IT-040 | Not implemented | Unverified |
 | REQ-DOD-006 to REQ-DOD-016 | Docker integration and full lifecycle are not implemented | Unverified |
 
 `cargo test --workspace` covers the unit tests listed above.
