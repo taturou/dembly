@@ -22,7 +22,7 @@
 | REQ-LCK-001 to REQ-LCK-023 | `dembly lock`, `enforce_image_lock`, `enforce_compose_lock`, `lock_writer_round_trips_*` | Parser/writer unit tested; Image/Compose lock creation and enforcement basic integration verified |
 | REQ-CLI-020 to REQ-CLI-052 | `up`, `down`, `run_command`, `exec_command`, Image/Compose lifecycle integration | Image/Compose lifecycle と `exec` の resolved environment integration verified |
 | REQ-CMP-020 to REQ-CMP-034 | `up_compose`, `down_compose`, `run_compose`, `exec_compose`, `check_compose`, `compose_base_runs_a_temporary_command_and_cleans_up` | Basic `run`、`up`、`exec`、`down`、`check` lifecycle と effective command override を Docker integration verified |
-| REQ-USR-001 to REQ-USR-007 | `runtime_probe`, `probe_image_user`, `runtime_user` | Unit tested; basic Image/Compose Runtime integration verified |
+| REQ-USR-001 to REQ-USR-007 | `runtime_probe`, `probe_image_user`, `runtime_user`, `image_base_preserves_non_root_runtime_user` | Unit and non-root Image Runtime integration verified |
 | REQ-RUN-010 to REQ-RUN-011 | `runtime_command`, `create_exports`, `run_hooks`, `image_base_card_runs_without_host_squashfs_mount` | Image Runtime の SquashFS mount、export、post-mount hook integration verified |
 | REQ-CHK-003 to REQ-CHK-006 | `image_base_card_runs_without_host_squashfs_mount` | Image Runtime で Card check の実行と failure propagation を integration verified |
 | IT-001, IT-003, IT-007, IT-027, IT-029, IT-030, IT-033 | `image_base_card_runs_without_host_squashfs_mount` | Verified by `cargo test --workspace` on this Docker/SquashFS host |
