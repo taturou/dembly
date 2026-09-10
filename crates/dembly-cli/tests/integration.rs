@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEMPORARY_DIRECTORY_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
@@ -133,6 +134,54 @@ fn compose_base_runs_a_temporary_command_and_cleans_up() {
         .unwrap();
     assert!(containers.status.success());
     assert!(containers.stdout.is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn card_build_interactive_creates_an_artifact_from_prompted_values() {
+    let root = temporary_directory();
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+    let tool_root = root.join("interactive-tool");
+
+    run(Command::new("cargo").current_dir(&repository).args([
+        "build",
+        "--release",
+        "--target",
+        "x86_64-unknown-linux-musl",
+        "-p",
+        "dembly-cli",
+    ]));
+    fs::create_dir_all(tool_root.join("bin")).unwrap();
+    fs::write(tool_root.join("bin/tool"), b"#!/bin/sh\nexit 0\n").unwrap();
+    let mut child = Command::new(&binary)
+        .args(["card", "build"])
+        .arg(&tool_root)
+        .arg(root.join("cards"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"\n1.0.0\n\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let manifest = fs::read_to_string(root.join("cards/interactive-tool/card.toml")).unwrap();
+    assert!(manifest.contains("name = \"interactive-tool\""));
+    assert!(manifest.contains("version = \"1.0.0\""));
+    assert!(root
+        .join("cards/interactive-tool/rootfs.squashfs")
+        .is_file());
     let _ = fs::remove_dir_all(root);
 }
 
