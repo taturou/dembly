@@ -11,6 +11,7 @@ name = "dembly-cli"
 version = "0.1.0"
 dependencies = [
  "dembly-card",
+ "dembly-core",
 ]
 
 [[package]]
