@@ -56,7 +56,7 @@ fn inspect_displays_deck_name_base_and_card_without_runtime() {
     let _ = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(directory.join("cards/clang")).unwrap();
     std::fs::write(directory.join("cards/clang/rootfs.squashfs"), b"abc").unwrap();
-    std::fs::write(directory.join("cards/clang/card.toml"), "schema_version = 1\nname = \"clang\"\nversion = \"20\"\n[filesystem]\ntype = \"squashfs\"\nfile = \"rootfs.squashfs\"\nsha256 = \"x\"\n[mount]\ntarget = \"/opt/dembly/cards/clang\"\n").unwrap();
+    std::fs::write(directory.join("cards/clang/card.toml"), "schema_version = 1\nname = \"clang\"\nversion = \"20\"\n[filesystem]\ntype = \"squashfs\"\nfile = \"rootfs.squashfs\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n[mount]\ntarget = \"/opt/dembly/cards/clang\"\n").unwrap();
     std::fs::write(directory.join("deck.toml"), "schema_version = 1\nname = \"example\"\n[base]\nimage = \"alpine:3.20\"\n[[cards]]\npath = \"cards/clang/card.toml\"\n").unwrap();
 
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_dembly"))

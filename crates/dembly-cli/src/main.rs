@@ -235,37 +235,87 @@ fn inspect(arguments: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let deck = match dembly_core::load_deck(&deck_path) {
+    let resolved = match dembly_core::resolve_deck(&deck_path, &bind_variables(&deck_path)) {
         Ok(deck) => deck,
         Err(error) => {
             eprintln!("dembly inspect: {error}");
             return ExitCode::from(2);
         }
     };
-    println!("Deck: {}", deck.name);
-    println!(
-        "Deck root: {}",
-        deck_path.parent().unwrap_or(&deck_path).display()
-    );
-    match &deck.base {
+    println!("Deck: {}", resolved.document.name);
+    println!("Deck root: {}", resolved.root.display());
+    match &resolved.document.base {
         dembly_core::Base::Image { image } => println!("Image Base: {image}"),
         dembly_core::Base::Compose { compose, service } => {
             println!("Compose Base: {compose} service={service}")
         }
     }
-    let root = deck_path.parent().unwrap_or(&deck_path);
-    for reference in deck.cards {
-        match dembly_core::load_card(&root.join(reference.path)) {
-            Ok(card) => println!(
-                "Card: {} {} mount={}",
-                card.name, card.version, card.mount.target
-            ),
-            Err(error) => {
-                eprintln!("dembly inspect: {error}");
-                return ExitCode::from(2);
-            }
+    let lock_path = resolved.root.join("deck.lock");
+    println!(
+        "Lock: {}",
+        if lock_path.is_file() {
+            "present"
+        } else {
+            "missing"
+        }
+    );
+    for card in &resolved.cards {
+        println!(
+            "Card: {} {} artifact={} mount={}",
+            card.document.name,
+            card.document.version,
+            card.manifest_path
+                .parent()
+                .unwrap()
+                .join(&card.document.filesystem.file)
+                .display(),
+            card.document.mount.target
+        );
+        for export in &card.document.exports {
+            println!(
+                "Export: card:{} {} -> {}",
+                card.document.name, export.source, export.target
+            );
         }
     }
+    println!(
+        "PATH: {}",
+        resolved
+            .environment
+            .get("PATH")
+            .map(String::as_str)
+            .unwrap_or("")
+    );
+    for volume in &resolved.volumes {
+        println!(
+            "Volume: owner={:?} name={} shared={} source={} target={}",
+            volume.owner,
+            volume.name,
+            volume.shared,
+            volume.source.display(),
+            volume.target.display()
+        );
+    }
+    for bind in &resolved.binds {
+        let canonical = bind.source.canonicalize().ok();
+        println!(
+            "Host Bind: owner={} declared={} canonical={} target={} mode={} required={}",
+            bind.owner,
+            bind.declared_source,
+            canonical
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<unavailable>".into()),
+            bind.target.display(),
+            bind.mode,
+            bind.required
+        );
+    }
+    for warning in &resolved.warnings {
+        println!("Warning: {warning}");
+    }
+    let identity = format!("dembly-{}", resolved.document.name);
+    println!("Runtime identity: {identity}");
     ExitCode::SUCCESS
 }
 
