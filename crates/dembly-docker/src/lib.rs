@@ -5,7 +5,8 @@ mod compose;
 mod image;
 
 pub use client::{
-    container_label, docker_status, image_identity, inspect_image, run_docker, ImageConfig,
+    container_label, docker_status, exec_in_container, image_identity, inspect_image, run_docker,
+    ImageConfig,
 };
 pub use compose::{compose_override, ComposeRuntimePlan};
 pub use image::{image_create_command, CardFileBind, ImageRuntimePlan};

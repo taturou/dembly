@@ -83,6 +83,19 @@ pub fn container_label(name: &str, label: &str) -> Result<String, String> {
         .map(|value| value.trim().to_owned())
 }
 
+pub fn exec_in_container(
+    name: &str,
+    user: &str,
+    argv: &[String],
+) -> Result<std::process::ExitStatus, String> {
+    let (program, arguments) = argv.split_first().ok_or("exec command is required")?;
+    Command::new("docker")
+        .args(["exec", "--user", user, name, program])
+        .args(arguments)
+        .status()
+        .map_err(|error| format!("cannot execute docker exec: {error}"))
+}
+
 fn inspect_lines(reference: &str, template: &str) -> Result<Vec<String>, String> {
     let output = Command::new("docker")
         .args(["image", "inspect", "--format", template, reference])

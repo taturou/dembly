@@ -57,6 +57,9 @@ fn main() -> ExitCode {
     if argument == "down" {
         return down(&arguments[1..]);
     }
+    if argument == "exec" {
+        return exec_command(&arguments[1..]);
+    }
     if argument == "inspect" {
         return inspect(&arguments[1..]);
     }
@@ -559,6 +562,76 @@ fn down(arguments: &[String]) -> ExitCode {
     }
     println!("stopped {name}");
     ExitCode::SUCCESS
+}
+
+fn exec_command(arguments: &[String]) -> ExitCode {
+    let Some(separator) = arguments.iter().position(|argument| argument == "--") else {
+        eprintln!("dembly exec requires -- <command...>");
+        return ExitCode::from(2);
+    };
+    if separator > 1 || separator + 1 == arguments.len() {
+        eprintln!("dembly exec usage: dembly exec [deck.toml] -- <command...>");
+        return ExitCode::from(2);
+    }
+    let current_directory = match std::env::current_dir() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly exec: cannot determine current directory: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let explicit = arguments
+        .first()
+        .filter(|_| separator == 1)
+        .map(PathBuf::from);
+    let deck_path = match dembly_core::discover_deck(explicit.as_deref(), &current_directory) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly exec: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let deck = match dembly_core::load_deck(&deck_path) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly exec: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let name = format!("dembly-{}", deck.name);
+    if dembly_docker::container_label(&name, "io.dembly.managed").as_deref() != Ok("true")
+        || dembly_docker::container_label(&name, "io.dembly.deck").as_deref()
+            != Ok(deck.name.as_str())
+    {
+        eprintln!("dembly exec: Runtime is not running: {name}");
+        return ExitCode::from(2);
+    }
+    let root = deck_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let state = match runtime_state(root, &deck.name) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly exec: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let config = match dembly_runtime::load_runtime_config(&state.join("runtime.toml")) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly exec: cannot read runtime metadata: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let user = format!("{}:{}", config.runtime_user.uid, config.runtime_user.gid);
+    match dembly_docker::exec_in_container(&name, &user, &arguments[separator + 1..]) {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => ExitCode::from(status.code().unwrap_or(2) as u8),
+        Err(error) => {
+            eprintln!("dembly exec: {error}");
+            ExitCode::from(2)
+        }
+    }
 }
 
 #[derive(Clone)]
