@@ -83,6 +83,16 @@ fn image_base_card_runs_without_host_squashfs_mount() {
         "{}",
         String::from_utf8_lossy(&second_output.stderr)
     );
+    let write_bind = Command::new(&binary)
+        .current_dir(&root)
+        .args(["run", "--", "/bin/sh", "-c", "printf x > /work/input"])
+        .output()
+        .unwrap();
+    assert!(!write_bind.status.success());
+    assert_eq!(
+        fs::read_to_string(root.join("host-input")).unwrap(),
+        "host-input\n"
+    );
     let check_output = Command::new(&binary)
         .current_dir(&root)
         .arg("check")
