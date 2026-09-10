@@ -17,7 +17,7 @@
 | REQ-CLI-060 | `inspect_displays_deck_name_base_and_card_without_runtime` | Unit tested |
 | REQ-LCK-001 to REQ-LCK-023 | `dembly lock`, `enforce_image_lock`, `enforce_compose_lock`, `lock_writer_round_trips_*` | Implemented; parser/writer unit tested, Docker identity verification unverified |
 | REQ-CLI-020 to REQ-CLI-052 | `up`, `down`, `run_command`, `exec_command` | Implemented; Docker integration unverified |
-| REQ-CMP-020 to REQ-CMP-034 | `up_compose`, `down_compose`, `run_compose`, `exec_compose`, `check_compose` | Implemented; Compose integration unverified |
+| REQ-CMP-020 to REQ-CMP-034 | `up_compose`, `down_compose`, `run_compose`, `exec_compose`, `check_compose`, `compose_base_runs_a_temporary_command_and_cleans_up` | Basic `run`、`up`、`exec`、`down`、`check` lifecycle と effective command override を Docker integration verified |
 | REQ-USR-001 to REQ-USR-007 | `runtime_probe`, `probe_image_user`, `runtime_user` | Implemented; image user probe integration unverified |
 | REQ-RUN-010 to REQ-RUN-011 | `runtime_command`, `create_exports`, `run_hooks` | Implemented; Runtime integration unverified |
 | IT-001, IT-003, IT-007, IT-027, IT-029, IT-030, IT-033 | `image_base_card_runs_without_host_squashfs_mount` | Verified by `cargo test --workspace` on this Docker/SquashFS host |
