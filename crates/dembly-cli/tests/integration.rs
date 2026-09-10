@@ -39,13 +39,22 @@ fn image_base_card_runs_without_host_squashfs_mount() {
         "bin",
         "--non-interactive",
     ]));
+    let manifest_path = root.join("cards/hello/card.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    fs::write(
+        &manifest_path,
+        format!(
+            "{manifest}\n[[exports]]\nsource = \"bin/hello\"\ntarget = \"/usr/local/bin/hello\"\n\n[[hooks.post_mount]]\nexec = \"setup/post-mount.sh\"\n"
+        ),
+    )
+    .unwrap();
     fs::write(root.join("deck.toml"), format!("schema_version = 1\nname = \"fixture-{}\"\n[base]\nimage = \"{tag}\"\n[[cards]]\npath = \"cards/hello/card.toml\"\n", std::process::id())).unwrap();
 
     run(Command::new(&binary).current_dir(&root).arg("validate"));
     run(Command::new(&binary).current_dir(&root).arg("lock"));
     let output = Command::new(&binary)
         .current_dir(&root)
-        .args(["run", "--", "hello"])
+        .args(["run", "--", "/usr/local/bin/hello"])
         .output()
         .unwrap();
     assert!(
