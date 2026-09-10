@@ -25,8 +25,10 @@
 | REQ-USR-001 to REQ-USR-007 | `runtime_probe`, `probe_image_user`, `runtime_user`, `image_base_preserves_non_root_runtime_user` | Unit and non-root Image Runtime integration verified |
 | REQ-RUN-010 to REQ-RUN-011 | `runtime_command`, `create_exports`, `run_hooks`, `image_base_card_runs_without_host_squashfs_mount` | Image Runtime の SquashFS mount、export、post-mount hook integration verified |
 | REQ-CHK-003 to REQ-CHK-006 | `image_base_card_runs_without_host_squashfs_mount` | Image Runtime で Card check の実行と failure propagation を integration verified |
-| IT-001, IT-003, IT-007, IT-027, IT-029, IT-030, IT-033 | `image_base_card_runs_without_host_squashfs_mount` | Verified by `cargo test --workspace` on this Docker/SquashFS host |
-| IT-002, IT-004 to IT-006, IT-008 to IT-026, IT-028, IT-031 to IT-040 | Not implemented | Unverified |
+| IT-001, IT-003, IT-006 to IT-008, IT-010, IT-014, IT-022, IT-027, IT-029 to IT-033 | Image Runtime fixture and `image_base_preserves_non_root_runtime_user` | Verified by `cargo test --workspace` on this Docker/SquashFS host |
+| IT-036, IT-038, IT-039 | `compose_base_runs_a_temporary_command_and_cleans_up` | Verified by `cargo test --workspace` on this Docker/Compose host |
+| IT-040 | `discovery_does_not_search_parent_directories` | Unit tested |
+| IT-002, IT-004 to IT-005, IT-009, IT-011 to IT-013, IT-015 to IT-021, IT-023 to IT-026, IT-028, IT-034 to IT-035, IT-037 | Not implemented | Unverified |
 | REQ-DOD-006 to REQ-DOD-016 | lifecycle implementation exists; integration acceptance coverage remains incomplete | Partially verified |
 
 `cargo test --workspace` covers the unit tests listed above.
