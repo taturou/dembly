@@ -49,7 +49,8 @@ fn image_base_card_runs_without_host_squashfs_mount() {
     )
     .unwrap();
     fs::write(root.join("host-input"), b"host-input\n").unwrap();
-    fs::write(root.join("deck.toml"), format!("schema_version = 1\nname = \"fixture-{}\"\n[base]\nimage = \"{tag}\"\n[[cards]]\npath = \"cards/hello/card.toml\"\n[[volumes]]\nname = \"cache\"\ntarget = \"/work/cache\"\n[[binds]]\nsource = \"${{DECK_ROOT}}/host-input\"\ntarget = \"/work/input\"\nmode = \"ro\"\n", std::process::id())).unwrap();
+    fs::create_dir_all(root.join("host-rw")).unwrap();
+    fs::write(root.join("deck.toml"), format!("schema_version = 1\nname = \"fixture-{}\"\n[base]\nimage = \"{tag}\"\n[[cards]]\npath = \"cards/hello/card.toml\"\n[[volumes]]\nname = \"cache\"\ntarget = \"/work/cache\"\n[[binds]]\nsource = \"${{DECK_ROOT}}/host-input\"\ntarget = \"/work/input\"\nmode = \"ro\"\n[[binds]]\nsource = \"${{DECK_ROOT}}/host-rw\"\ntarget = \"/work/rw\"\nmode = \"rw\"\n", std::process::id())).unwrap();
 
     let acceptance = Command::new(repository.join("scripts/accept-real-cards.sh"))
         .env("DEMBLY_BIN", &binary)
@@ -92,6 +93,20 @@ fn image_base_card_runs_without_host_squashfs_mount() {
     assert_eq!(
         fs::read_to_string(root.join("host-input")).unwrap(),
         "host-input\n"
+    );
+    let write_rw_bind = Command::new(&binary)
+        .current_dir(&root)
+        .args(["run", "--", "/bin/sh", "-c", "printf rw > /work/rw/result"])
+        .output()
+        .unwrap();
+    assert!(
+        write_rw_bind.status.success(),
+        "{}",
+        String::from_utf8_lossy(&write_rw_bind.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("host-rw/result")).unwrap(),
+        "rw"
     );
     let check_output = Command::new(&binary)
         .current_dir(&root)
