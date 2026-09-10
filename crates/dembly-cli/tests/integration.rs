@@ -51,8 +51,17 @@ fn image_base_card_runs_without_host_squashfs_mount() {
     fs::write(root.join("host-input"), b"host-input\n").unwrap();
     fs::write(root.join("deck.toml"), format!("schema_version = 1\nname = \"fixture-{}\"\n[base]\nimage = \"{tag}\"\n[[cards]]\npath = \"cards/hello/card.toml\"\n[[volumes]]\nname = \"cache\"\ntarget = \"/work/cache\"\n[[binds]]\nsource = \"${{DECK_ROOT}}/host-input\"\ntarget = \"/work/input\"\nmode = \"ro\"\n", std::process::id())).unwrap();
 
-    run(Command::new(&binary).current_dir(&root).arg("validate"));
-    run(Command::new(&binary).current_dir(&root).arg("lock"));
+    let acceptance = Command::new(repository.join("scripts/accept-real-cards.sh"))
+        .env("DEMBLY_BIN", &binary)
+        .arg(root.join("deck.toml"))
+        .args(["--", "/usr/local/bin/hello"])
+        .output()
+        .unwrap();
+    assert!(
+        acceptance.status.success(),
+        "{}",
+        String::from_utf8_lossy(&acceptance.stderr)
+    );
     let output = Command::new(&binary)
         .current_dir(&root)
         .args(["run", "--", "/usr/local/bin/hello"])
@@ -87,7 +96,7 @@ fn image_base_card_runs_without_host_squashfs_mount() {
     assert!(String::from_utf8_lossy(&check_output.stdout).contains("check hello"));
     assert_eq!(
         fs::read_to_string(root.join("volumes/cache/result")).unwrap(),
-        "persisted\npersisted\npersisted\n"
+        "persisted\npersisted\npersisted\npersisted\npersisted\n"
     );
     let manifest = fs::read_to_string(&manifest_path).unwrap();
     fs::write(
