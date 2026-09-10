@@ -169,7 +169,7 @@ fn compose_base_runs_a_temporary_command_and_cleans_up() {
     fs::write(
         root.join("deck.toml"),
         format!(
-            "schema_version = 1\nname = \"{deck_name}\"\n[base]\ncompose = \"compose.yaml\"\nservice = \"dev\"\n"
+            "schema_version = 1\nname = \"{deck_name}\"\n[base]\ncompose = \"compose.yaml\"\nservice = \"dev\"\n[environment]\nCOMPOSE_ENV = \"enabled\"\n"
         ),
     )
     .unwrap();
@@ -189,7 +189,13 @@ fn compose_base_runs_a_temporary_command_and_cleans_up() {
     run(Command::new(&binary).current_dir(&root).arg("up"));
     let output = Command::new(&binary)
         .current_dir(&root)
-        .args(["exec", "--", "/bin/echo", "compose-exec"])
+        .args([
+            "exec",
+            "--",
+            "/bin/sh",
+            "-c",
+            "test \"$COMPOSE_ENV\" = enabled && echo compose-exec",
+        ])
         .output()
         .unwrap();
     assert!(
