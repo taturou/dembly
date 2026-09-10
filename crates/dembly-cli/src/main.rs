@@ -78,7 +78,13 @@ fn main() -> ExitCode {
     ExitCode::from(2)
 }
 
-fn up_compose(resolved: &dembly_core::ResolvedDeck, compose: &str, service: &str) -> ExitCode {
+fn up_compose(
+    resolved: &dembly_core::ResolvedDeck,
+    compose: &str,
+    service: &str,
+    process_override: Option<&[String]>,
+    detached: bool,
+) -> ExitCode {
     let compose_path = resolved.root.join(compose);
     let image = match dembly_docker::compose_service_image(&compose_path, service) {
         Ok(value) => value,
@@ -100,12 +106,15 @@ fn up_compose(resolved: &dembly_core::ResolvedDeck, compose: &str, service: &str
         eprintln!("dembly up: {error}");
         return ExitCode::from(2);
     }
-    let process = image_config
+    let default_process = image_config
         .entrypoint
         .iter()
         .chain(&image_config.command)
         .cloned()
         .collect::<Vec<_>>();
+    let process = process_override
+        .map(<[String]>::to_vec)
+        .unwrap_or(default_process);
     if process.is_empty() {
         eprintln!("dembly up: Compose service image has no original Entrypoint or Cmd");
         return ExitCode::from(2);
@@ -197,16 +206,27 @@ fn up_compose(resolved: &dembly_core::ResolvedDeck, compose: &str, service: &str
         OsString::from("-f"),
         override_path.into_os_string(),
         OsString::from("up"),
-        OsString::from("-d"),
     ];
+    let mut arguments = arguments;
+    if detached {
+        arguments.push(OsString::from("-d"));
+    } else {
+        arguments.extend([
+            OsString::from("--abort-on-container-exit"),
+            OsString::from("--exit-code-from"),
+            OsString::from(service),
+        ]);
+    }
     match dembly_docker::compose_status(&arguments) {
         Ok(status) if status.success() => {
-            println!("started {project}");
+            if detached {
+                println!("started {project}");
+            }
             ExitCode::SUCCESS
         }
         Ok(status) => {
             eprintln!("dembly up: docker compose up failed with status {status}");
-            ExitCode::from(2)
+            ExitCode::from(status.code().unwrap_or(2) as u8)
         }
         Err(error) => {
             eprintln!("dembly up: {error}");
@@ -613,7 +633,7 @@ fn up(arguments: &[String]) -> ExitCode {
     let image = match &resolved.document.base {
         dembly_core::Base::Image { image } => image,
         dembly_core::Base::Compose { compose, service } => {
-            return up_compose(&resolved, compose, service)
+            return up_compose(&resolved, compose, service, None, true)
         }
     };
     let image_config = match dembly_docker::inspect_image(image) {
@@ -1013,9 +1033,14 @@ fn run_command(arguments: &[String]) -> ExitCode {
     };
     let image = match &resolved.document.base {
         dembly_core::Base::Image { image } => image,
-        dembly_core::Base::Compose { .. } => {
-            eprintln!("dembly run: Compose Base lifecycle is not implemented yet");
-            return ExitCode::from(2);
+        dembly_core::Base::Compose { compose, service } => {
+            return run_compose(
+                &deck_path,
+                &resolved,
+                compose,
+                service,
+                &arguments[separator + 1..],
+            )
         }
     };
     let image_config = match dembly_docker::inspect_image(image) {
@@ -1144,6 +1169,21 @@ fn run_command(arguments: &[String]) -> ExitCode {
         eprintln!("dembly run: temporary metadata cleanup failed: {error}");
     }
     ExitCode::from(result as u8)
+}
+
+fn run_compose(
+    deck_path: &std::path::Path,
+    resolved: &dembly_core::ResolvedDeck,
+    compose: &str,
+    service: &str,
+    argv: &[String],
+) -> ExitCode {
+    let result = up_compose(resolved, compose, service, Some(argv), false);
+    let cleanup = down(&[deck_path.to_string_lossy().into_owned()]);
+    if cleanup != ExitCode::SUCCESS {
+        return ExitCode::from(2);
+    }
+    result
 }
 
 fn exec_command(arguments: &[String]) -> ExitCode {
