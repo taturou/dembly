@@ -218,6 +218,27 @@ pub fn compose_service_container(
     }
 }
 
+/// Reports whether a Compose project already has a container for the selected service.
+/// `--all` is deliberate: a stopped managed Runtime must not be implicitly replaced.
+pub fn compose_service_exists(
+    arguments: &[std::ffi::OsString],
+    service: &str,
+) -> Result<bool, String> {
+    let output = Command::new("docker")
+        .arg("compose")
+        .args(arguments)
+        .args(["ps", "--all", "-q", service])
+        .output()
+        .map_err(|error| format!("cannot execute docker compose ps: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot inspect Compose Runtime service {service}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(!output.stdout.is_empty() && !output.stdout.iter().all(u8::is_ascii_whitespace))
+}
+
 fn inspect_lines(reference: &str, template: &str) -> Result<Vec<String>, String> {
     let output = Command::new("docker")
         .args(["image", "inspect", "--format", template, reference])

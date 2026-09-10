@@ -86,6 +86,24 @@ fn up_compose(
     detached: bool,
 ) -> ExitCode {
     let compose_path = resolved.root.join(compose);
+    let project = format!("dembly-{}", resolved.document.name);
+    let existing_project = vec![
+        OsString::from("-p"),
+        OsString::from(&project),
+        OsString::from("-f"),
+        compose_path.clone().into_os_string(),
+    ];
+    match dembly_docker::compose_service_exists(&existing_project, service) {
+        Ok(true) => {
+            eprintln!("dembly up: Runtime already exists: {project}");
+            return ExitCode::from(2);
+        }
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    }
     let image = match dembly_docker::compose_service_image(&compose_path, service) {
         Ok(value) => value,
         Err(error) => {
@@ -197,7 +215,6 @@ fn up_compose(
         eprintln!("dembly up: cannot write Compose override: {error}");
         return ExitCode::from(2);
     }
-    let project = format!("dembly-{}", resolved.document.name);
     let arguments = vec![
         OsString::from("-p"),
         OsString::from(&project),
