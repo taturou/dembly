@@ -94,9 +94,25 @@ fn image_base_card_runs_without_host_squashfs_mount() {
         String::from_utf8_lossy(&check_output.stderr)
     );
     assert!(String::from_utf8_lossy(&check_output.stdout).contains("check hello"));
+    run(Command::new(&binary).current_dir(&root).arg("up"));
+    let exec_output = Command::new(&binary)
+        .current_dir(&root)
+        .args(["exec", "--", "/usr/local/bin/hello"])
+        .output()
+        .unwrap();
+    assert!(
+        exec_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&exec_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&exec_output.stdout).trim(),
+        "hello-card"
+    );
+    run(Command::new(&binary).current_dir(&root).arg("down"));
     assert_eq!(
         fs::read_to_string(root.join("volumes/cache/result")).unwrap(),
-        "persisted\npersisted\npersisted\npersisted\npersisted\n"
+        "persisted\npersisted\npersisted\npersisted\npersisted\npersisted\n"
     );
     let manifest = fs::read_to_string(&manifest_path).unwrap();
     fs::write(

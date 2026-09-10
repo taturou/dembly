@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
 
 use crate::compose_config::{parse_compose_service_config, ComposeServiceConfig};
@@ -108,10 +109,16 @@ pub fn exec_in_container(
     name: &str,
     user: &str,
     argv: &[String],
+    environment: &BTreeMap<String, String>,
 ) -> Result<std::process::ExitStatus, String> {
     let (program, arguments) = argv.split_first().ok_or("exec command is required")?;
-    Command::new("docker")
-        .args(["exec", "--user", user, name, program])
+    let mut command = Command::new("docker");
+    command.args(["exec", "--user", user]);
+    for (key, value) in environment {
+        command.args(["--env", &format!("{key}={value}")]);
+    }
+    command
+        .args([name, program])
         .args(arguments)
         .status()
         .map_err(|error| format!("cannot execute docker exec: {error}"))

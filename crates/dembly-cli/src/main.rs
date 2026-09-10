@@ -1313,7 +1313,12 @@ fn exec_command(arguments: &[String]) -> ExitCode {
         }
     };
     let user = format!("{}:{}", config.runtime_user.uid, config.runtime_user.gid);
-    match dembly_docker::exec_in_container(&name, &user, &arguments[separator + 1..]) {
+    match dembly_docker::exec_in_container(
+        &name,
+        &user,
+        &arguments[separator + 1..],
+        &config.environment,
+    ) {
         Ok(status) if status.success() => ExitCode::SUCCESS,
         Ok(status) => ExitCode::from(status.code().unwrap_or(2) as u8),
         Err(error) => {
@@ -1374,7 +1379,7 @@ fn exec_compose(
         }
     };
     let user = format!("{}:{}", config.runtime_user.uid, config.runtime_user.gid);
-    match dembly_docker::exec_in_container(&container, &user, argv) {
+    match dembly_docker::exec_in_container(&container, &user, argv, &config.environment) {
         Ok(status) if status.success() => ExitCode::SUCCESS,
         Ok(status) => ExitCode::from(status.code().unwrap_or(2) as u8),
         Err(error) => {
