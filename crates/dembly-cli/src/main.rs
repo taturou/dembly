@@ -394,7 +394,13 @@ fn runtime_command(arguments: &[String]) -> ExitCode {
 }
 
 fn runtime_probe(configured: &str) -> ExitCode {
-    let candidate = configured.split(':').next().unwrap_or_default();
+    let mut configured_parts = configured.split(':');
+    let candidate = configured_parts.next().unwrap_or_default();
+    let configured_group = configured_parts.next();
+    if configured_parts.next().is_some() {
+        eprintln!("dembly runtime probe: invalid configured user {configured}");
+        return ExitCode::from(2);
+    }
     let passwd = match fs::read_to_string("/etc/passwd") {
         Ok(value) => value,
         Err(error) => {
@@ -411,12 +417,34 @@ fn runtime_probe(configured: &str) -> ExitCode {
             if fields[2].parse::<u32>().is_err() || fields[3].parse::<u32>().is_err() {
                 continue;
             }
-            println!("{}\t{}\t{}\t{}", fields[0], fields[2], fields[3], fields[5]);
+            let gid = match configured_group.filter(|value| !value.is_empty()) {
+                None => fields[3].to_owned(),
+                Some(value) if value.parse::<u32>().is_ok() => value.to_owned(),
+                Some(value) => match group_id(value) {
+                    Some(value) => value,
+                    None => {
+                        eprintln!("dembly runtime probe: cannot resolve configured group {value}");
+                        return ExitCode::from(2);
+                    }
+                },
+            };
+            println!("{}\t{}\t{}\t{}", fields[0], fields[2], gid, fields[5]);
             return ExitCode::SUCCESS;
         }
     }
     eprintln!("dembly runtime probe: cannot resolve configured user {configured} in /etc/passwd");
     ExitCode::from(2)
+}
+
+fn group_id(name: &str) -> Option<String> {
+    fs::read_to_string("/etc/group")
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let fields = line.split(':').collect::<Vec<_>>();
+            (fields.len() >= 3 && fields[0] == name && fields[2].parse::<u32>().is_ok())
+                .then(|| fields[2].to_owned())
+        })
 }
 
 #[cfg(target_os = "linux")]

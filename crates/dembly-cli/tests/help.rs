@@ -26,6 +26,18 @@ fn internal_runtime_probe_resolves_root_from_passwd() {
 }
 
 #[test]
+fn internal_runtime_probe_honors_numeric_configured_gid() {
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_dembly"))
+        .args(["__runtime", "probe", "root:123"])
+        .output()
+        .expect("dembly should start");
+    let output = String::from_utf8(result.stdout).expect("probe output should be UTF-8");
+    let fields = output.trim().split('\t').collect::<Vec<_>>();
+    assert!(result.status.success());
+    assert_eq!(fields[2], "123");
+}
+
+#[test]
 fn card_build_non_interactive_rejects_missing_required_options() {
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_dembly"))
         .args(["card", "build", "/tool", "/cards", "--non-interactive"])
