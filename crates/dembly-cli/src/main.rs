@@ -110,7 +110,7 @@ fn up_compose(resolved: &dembly_core::ResolvedDeck, compose: &str, service: &str
         eprintln!("dembly up: Compose service image has no original Entrypoint or Cmd");
         return ExitCode::from(2);
     }
-    let user = match runtime_user(&image_config.user) {
+    let user = match runtime_user(&image, &image_config.user) {
         Ok(value) => value,
         Err(error) => {
             eprintln!("dembly up: {error}");
@@ -320,6 +320,9 @@ fn inspect(arguments: &[String]) -> ExitCode {
 }
 
 fn runtime_command(arguments: &[String]) -> ExitCode {
+    if arguments.len() == 2 && arguments[0] == "probe" {
+        return runtime_probe(&arguments[1]);
+    }
     if arguments.len() != 2 || arguments[0] != "init" {
         eprintln!("dembly: invalid internal runtime command");
         return ExitCode::from(2);
@@ -367,6 +370,32 @@ fn runtime_command(arguments: &[String]) -> ExitCode {
         .envs(&config.environment)
         .exec();
     eprintln!("dembly runtime: cannot exec {program}: {error}");
+    ExitCode::from(2)
+}
+
+fn runtime_probe(configured: &str) -> ExitCode {
+    let candidate = configured.split(':').next().unwrap_or_default();
+    let passwd = match fs::read_to_string("/etc/passwd") {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly runtime probe: cannot read /etc/passwd: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    for line in passwd.lines() {
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() < 7 {
+            continue;
+        }
+        if fields[0] == candidate || fields[2] == candidate {
+            if fields[2].parse::<u32>().is_err() || fields[3].parse::<u32>().is_err() {
+                continue;
+            }
+            println!("{}\t{}\t{}\t{}", fields[0], fields[2], fields[3], fields[5]);
+            return ExitCode::SUCCESS;
+        }
+    }
+    eprintln!("dembly runtime probe: cannot resolve configured user {configured} in /etc/passwd");
     ExitCode::from(2)
 }
 
@@ -612,7 +641,7 @@ fn up(arguments: &[String]) -> ExitCode {
         eprintln!("dembly up: image has no original Entrypoint or Cmd");
         return ExitCode::from(2);
     }
-    let user = match runtime_user(&image_config.user) {
+    let user = match runtime_user(image, &image_config.user) {
         Ok(value) => value,
         Err(error) => {
             eprintln!("dembly up: {error}");
@@ -976,7 +1005,7 @@ fn run_command(arguments: &[String]) -> ExitCode {
         eprintln!("dembly run: {error}");
         return ExitCode::from(2);
     }
-    let user = match runtime_user(&image_config.user) {
+    let user = match runtime_user(image, &image_config.user) {
         Ok(value) => value,
         Err(error) => {
             eprintln!("dembly run: {error}");
@@ -1169,7 +1198,7 @@ struct RuntimeUser {
     home: String,
 }
 
-fn runtime_user(configured: &str) -> Result<RuntimeUser, String> {
+fn runtime_user(image: &str, configured: &str) -> Result<RuntimeUser, String> {
     if configured.is_empty() || configured == "root" || configured == "0" || configured == "0:0" {
         return Ok(RuntimeUser {
             name: "root".into(),
@@ -1178,22 +1207,15 @@ fn runtime_user(configured: &str) -> Result<RuntimeUser, String> {
             home: "/root".into(),
         });
     }
-    let mut values = configured.split(':');
-    let uid = values.next().unwrap_or_default().parse::<u32>().map_err(|_| format!("cannot resolve named image user {configured}; only root or numeric UID:GID is currently supported"))?;
-    let gid = values
-        .next()
-        .map(str::parse)
-        .transpose()
-        .map_err(|_| format!("invalid image GID in {configured}"))?
-        .unwrap_or(uid);
-    if values.next().is_some() {
-        return Err(format!("invalid image user: {configured}"));
-    }
+    let executable = std::env::current_exe().map_err(|error| {
+        format!("cannot resolve current executable for Runtime user probe: {error}")
+    })?;
+    let user = dembly_docker::probe_image_user(image, &executable, configured)?;
     Ok(RuntimeUser {
-        name: uid.to_string(),
-        uid,
-        gid,
-        home: "/".into(),
+        name: user.name,
+        uid: user.uid,
+        gid: user.gid,
+        home: user.home,
     })
 }
 

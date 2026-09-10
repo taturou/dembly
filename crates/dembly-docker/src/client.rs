@@ -9,6 +9,14 @@ pub struct ImageConfig {
     pub user: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProbedUser {
+    pub name: String,
+    pub uid: u32,
+    pub gid: u32,
+    pub home: String,
+}
+
 /// Resolve the immutable ID of a locally available Docker image.
 /// Pulling is intentionally left to the caller so lock creation is explicit.
 pub fn image_identity(reference: &str) -> Result<String, String> {
@@ -94,6 +102,51 @@ pub fn exec_in_container(
         .args(arguments)
         .status()
         .map_err(|error| format!("cannot execute docker exec: {error}"))
+}
+
+pub fn probe_image_user(
+    image: &str,
+    executable: &std::path::Path,
+    configured: &str,
+) -> Result<ProbedUser, String> {
+    let bind = format!("{}:/run/dembly/bin/dembly:ro", executable.display());
+    let output = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "--entrypoint",
+            "/run/dembly/bin/dembly",
+            "--volume",
+            &bind,
+            image,
+            "__runtime",
+            "probe",
+            configured,
+        ])
+        .output()
+        .map_err(|error| format!("cannot execute Runtime user probe: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot resolve Runtime user {configured}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let value = String::from_utf8(output.stdout)
+        .map_err(|_| "Runtime user probe emitted non-UTF-8 output".to_owned())?;
+    let fields = value.trim().split('\t').collect::<Vec<_>>();
+    if fields.len() != 4 {
+        return Err("Runtime user probe emitted malformed output".into());
+    }
+    Ok(ProbedUser {
+        name: fields[0].into(),
+        uid: fields[1]
+            .parse()
+            .map_err(|_| "Runtime user probe emitted invalid UID")?,
+        gid: fields[2]
+            .parse()
+            .map_err(|_| "Runtime user probe emitted invalid GID")?,
+        home: fields[3].into(),
+    })
 }
 
 pub fn compose_service_image(compose: &std::path::Path, service: &str) -> Result<String, String> {
