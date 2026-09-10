@@ -7,6 +7,7 @@ mod lock;
 mod model;
 mod parse;
 mod planning;
+mod resolution;
 
 pub use checksum::verify_card_filesystem;
 pub use discovery::discover_deck;
@@ -22,3 +23,4 @@ pub use planning::{
     validate_mount_targets, validate_shared_volume_consistency, BindVariables, CardEnvironment,
     MountResource, VolumeOwner,
 };
+pub use resolution::{resolve_deck, ResolvedBind, ResolvedCard, ResolvedDeck, ResolvedVolume};

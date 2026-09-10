@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::os::unix::process::CommandExt;
 use std::process::ExitCode;
 use std::{
@@ -196,73 +195,42 @@ fn validate(arguments: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let deck = match dembly_core::load_deck(&deck_path) {
+    let resolved = match dembly_core::resolve_deck(&deck_path, &bind_variables(&deck_path)) {
         Ok(deck) => deck,
         Err(error) => {
             eprintln!("dembly validate: {error}");
             return ExitCode::from(2);
         }
     };
-    let Some(deck_root) = deck_path.parent() else {
-        eprintln!("dembly validate: deck.toml has no parent directory");
-        return ExitCode::from(2);
-    };
-    let mut card_names = BTreeSet::new();
-    let mut mount_targets = BTreeSet::new();
-    for reference in deck.cards {
-        let card_path = deck_root.join(reference.path);
-        let card = match dembly_core::load_card(&card_path) {
-            Ok(card) => card,
-            Err(error) => {
-                eprintln!("dembly validate: {error}");
-                return ExitCode::from(2);
-            }
-        };
-        if card.filesystem.file_type != "squashfs" {
-            eprintln!(
-                "dembly validate: Card {} filesystem.type must be squashfs",
-                card.name
-            );
-            return ExitCode::from(2);
-        }
-        if !valid_card_name(&card.name) {
-            eprintln!("dembly validate: invalid Card name: {}", card.name);
-            return ExitCode::from(2);
-        }
-        if !card_names.insert(card.name.clone()) {
-            eprintln!("dembly validate: duplicate Card name: {}", card.name);
-            return ExitCode::from(2);
-        }
-        if !PathBuf::from(&card.mount.target).is_absolute()
-            || card.mount.target.split('/').any(|part| part == "..")
+    for card in &resolved.cards {
+        if let Err(error) = dembly_core::verify_card_filesystem(&card.manifest_path, &card.document)
         {
-            eprintln!(
-                "dembly validate: invalid Card mount target: {}",
-                card.mount.target
-            );
-            return ExitCode::from(2);
-        }
-        if !mount_targets.insert(card.mount.target.clone()) {
-            eprintln!(
-                "dembly validate: duplicate Card mount target: {}",
-                card.mount.target
-            );
-            return ExitCode::from(2);
-        }
-        if let Err(error) = dembly_core::verify_card_filesystem(&card_path, &card) {
             eprintln!("dembly validate: {error}");
             return ExitCode::from(2);
         }
     }
-    println!("Deck {} is valid", deck.name);
+    for warning in &resolved.warnings {
+        eprintln!("dembly validate: warning: {warning}");
+    }
+    println!("Deck {} is valid", resolved.document.name);
     ExitCode::SUCCESS
 }
 
-fn valid_card_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || character == '_' || character == '-'
-        })
+fn bind_variables(deck_path: &std::path::Path) -> dembly_core::BindVariables {
+    let host_home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let deck_root = deck_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from("."));
+    dembly_core::BindVariables {
+        host_home,
+        deck_root,
+        user: "root".into(),
+        home: "/root".into(),
+    }
 }
 
 fn card_build(arguments: &[String]) -> ExitCode {
