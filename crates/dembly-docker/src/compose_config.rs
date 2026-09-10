@@ -189,12 +189,26 @@ impl<'a> JsonParser<'a> {
     }
 
     fn unicode_escape(&mut self) -> Result<char, String> {
+        let scalar = self.unicode_scalar()?;
+        if !(0xd800..=0xdbff).contains(&scalar) {
+            return char::from_u32(scalar).ok_or_else(|| "invalid JSON unicode scalar".into());
+        }
+        self.expect(b'\\')?;
+        self.expect(b'u')?;
+        let low = self.unicode_scalar()?;
+        if !(0xdc00..=0xdfff).contains(&low) {
+            return Err("invalid JSON unicode surrogate pair".into());
+        }
+        let scalar = 0x1_0000 + ((scalar - 0xd800) << 10) + (low - 0xdc00);
+        char::from_u32(scalar).ok_or_else(|| "invalid JSON unicode surrogate pair".into())
+    }
+
+    fn unicode_scalar(&mut self) -> Result<u32, String> {
         let digits = (0..4)
             .map(|_| self.next().ok_or("truncated JSON unicode escape"))
             .collect::<Result<Vec<_>, _>>()?;
         let digits = std::str::from_utf8(&digits).map_err(|_| "invalid JSON unicode escape")?;
-        let scalar = u32::from_str_radix(digits, 16).map_err(|_| "invalid JSON unicode escape")?;
-        char::from_u32(scalar).ok_or_else(|| "invalid JSON unicode scalar".into())
+        u32::from_str_radix(digits, 16).map_err(|_| "invalid JSON unicode escape".into())
     }
 
     fn number(&mut self) -> Result<JsonValue, String> {
@@ -276,5 +290,16 @@ mod tests {
         assert_eq!(value.entrypoint, Some(vec!["/init".into()]));
         assert_eq!(value.command, Some(Vec::new()));
         assert_eq!(value.user, Some("1000:1001".into()));
+    }
+
+    #[test]
+    fn parses_json_unicode_surrogate_pairs_in_unrelated_config() {
+        let value = parse_compose_service_config(
+            r#"{"label":"\\ud83d\\ude80","services":{"dev":{"entrypoint":null,"command":["run"],"user":null}}}"#,
+            "dev",
+        )
+        .unwrap();
+
+        assert_eq!(value.command, Some(vec!["run".into()]));
     }
 }
