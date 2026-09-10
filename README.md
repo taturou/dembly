@@ -110,13 +110,15 @@ Card は trusted artifact とし、root hook、Host Bind、container 内の moun
 これは untrusted Card の sandbox ではありません。
 secret source の内容を Runtime metadata や log へコピーしません。
 
-Compose Base lifecycle、named-image-user の passwd probe、full Docker integration suite は現在実装途中です。
+Compose Base の `run`、full Docker integration suite は現在実装途中です。
 FUSE、Docker named volume、remote Card repository、dependency solver、署名、rootless Docker は PoC scope 外です。
 
 ## Compose Base
 
 Compose Deck の宣言は TOML の `[base] compose` と `service` で行い、user-authored `compose.yaml` を変更せず generated override を使う設計です。
-override planner は実装済みですが、Compose lifecycle command は未実装です。
+`lock`、`up`、`down`、`exec`、`check` は generated override を使用します。
+selected service だけを Runtime 化し、non-selected service の compose definition は変更しません。
+`run` は未実装です。
 
 ## Evaluation procedure
 
