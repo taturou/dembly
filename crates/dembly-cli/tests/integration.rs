@@ -110,6 +110,15 @@ fn image_base_card_runs_without_host_squashfs_mount() {
         "hello-card"
     );
     run(Command::new(&binary).current_dir(&root).arg("down"));
+    let container_name = format!("dembly-fixture-{}", std::process::id());
+    let containers = Command::new("docker")
+        .args(["container", "ls", "--all", "--filter"])
+        .arg(format!("name=^/{container_name}$"))
+        .args(["--format", "{{.ID}}"])
+        .output()
+        .unwrap();
+    assert!(containers.status.success());
+    assert!(containers.stdout.is_empty());
     assert_eq!(
         fs::read_to_string(root.join("volumes/cache/result")).unwrap(),
         "persisted\npersisted\npersisted\npersisted\npersisted\npersisted\n"
