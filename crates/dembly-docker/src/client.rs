@@ -1,5 +1,7 @@
 use std::process::Command;
 
+use crate::compose_config::{parse_compose_service_config, ComposeServiceConfig};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImageConfig {
     pub id: String,
@@ -179,6 +181,32 @@ pub fn compose_service_image(compose: &std::path::Path, service: &str) -> Result
     } else {
         Ok(image)
     }
+}
+
+pub fn compose_service_config(
+    compose: &std::path::Path,
+    service: &str,
+) -> Result<ComposeServiceConfig, String> {
+    let output = Command::new("docker")
+        .args([
+            "compose",
+            "-f",
+            compose.to_string_lossy().as_ref(),
+            "config",
+            "--format",
+            "json",
+        ])
+        .output()
+        .map_err(|error| format!("cannot execute docker compose config: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot resolve Compose service {service}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let json = String::from_utf8(output.stdout)
+        .map_err(|_| "docker compose config emitted non-UTF-8 output".to_owned())?;
+    parse_compose_service_config(&json, service)
 }
 
 pub fn compose_status(

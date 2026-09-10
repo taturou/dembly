@@ -118,16 +118,28 @@ fn up_compose(
             return ExitCode::from(2);
         }
     };
+    let service_config = match dembly_docker::compose_service_config(&compose_path, service) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    };
     if let Err(error) = enforce_compose_lock(resolved, compose, service, &image_config.id)
         .and_then(|_| verify_cards(resolved))
     {
         eprintln!("dembly up: {error}");
         return ExitCode::from(2);
     }
-    let default_process = image_config
+    let entrypoint = service_config
         .entrypoint
+        .unwrap_or_else(|| image_config.entrypoint.clone());
+    let command = service_config
+        .command
+        .unwrap_or_else(|| image_config.command.clone());
+    let default_process = entrypoint
         .iter()
-        .chain(&image_config.command)
+        .chain(&command)
         .cloned()
         .collect::<Vec<_>>();
     let process = process_override
@@ -137,7 +149,8 @@ fn up_compose(
         eprintln!("dembly up: Compose service image has no original Entrypoint or Cmd");
         return ExitCode::from(2);
     }
-    let user = match runtime_user(&image, &image_config.user) {
+    let configured_user = service_config.user.unwrap_or(image_config.user);
+    let user = match runtime_user(&image, &configured_user) {
         Ok(value) => value,
         Err(error) => {
             eprintln!("dembly up: {error}");
