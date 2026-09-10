@@ -26,4 +26,5 @@
 
 `cargo test --workspace` covers the unit tests listed above.
 
-Docker, Compose, SquashFS mount, loop device, static musl binary, and proprietary Card acceptance require separate integration coverage before completion can be claimed.
+静的 musl binary は `cargo build --release --target x86_64-unknown-linux-musl -p dembly-cli` で検証済みです。
+Docker、Compose、SquashFS mount、loop device、および proprietary Card acceptance は別途 integration coverage が必要です。
