@@ -52,6 +52,17 @@ dembly card build /opt/clang ./cards \
 interactive mode では Card name、version、mount target を入力します。
 `mksquashfs -noappend -comp zstd` で temporary artifact を作成後、atomic rename します。
 
+実 artifact の acceptance は Card 名を特別扱いせず、Card manifest の `[check]` と追加 command を用いて実行します。
+
+```bash
+DEMBLY_BIN=target/x86_64-unknown-linux-musl/release/dembly \
+  scripts/accept-real-cards.sh deck.toml \
+  -- clang --version \
+  -- clang /workspace/minimal.c -o /tmp/minimal \
+  -- tis /workspace/representative-input \
+  -- emcos-sdk-command --known-file
+```
+
 ## Image Base Deck
 
 ```toml
