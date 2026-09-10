@@ -7,7 +7,11 @@ fn compose_override_changes_only_selected_service_with_internal_entrypoint() {
         service: "dev".into(),
         executable: PathBuf::from("/host/dembly"),
         runtime_config: PathBuf::from("/tmp/runtime.toml"),
-        mounts: vec![(PathBuf::from("/cards/clang/rootfs.squashfs"), "/run/dembly/cards/clang.squashfs".into(), true)],
+        mounts: vec![(
+            PathBuf::from("/cards/clang/rootfs.squashfs"),
+            "/run/dembly/cards/clang.squashfs".into(),
+            true,
+        )],
         labels: vec![("io.dembly.managed".into(), "true".into())],
     };
     let override_file = compose_override(&plan);

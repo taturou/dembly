@@ -21,8 +21,19 @@ pub fn squashfs_mount_command(card: &RuntimeCard) -> Vec<String> {
 }
 
 pub fn mount_card(card: &RuntimeCard) -> Result<(), String> {
-    std::fs::create_dir_all(&card.mount_target).map_err(|error| format!("cannot create {}: {error}", card.mount_target.display()))?;
+    std::fs::create_dir_all(&card.mount_target)
+        .map_err(|error| format!("cannot create {}: {error}", card.mount_target.display()))?;
     let command = squashfs_mount_command(card);
-    let status = Command::new(&command[0]).args(&command[1..]).status().map_err(|error| format!("cannot execute mount: {error}"))?;
-    if status.success() { Ok(()) } else { Err(format!("SquashFS mount failed for {} with status {status}", card.name)) }
+    let status = Command::new(&command[0])
+        .args(&command[1..])
+        .status()
+        .map_err(|error| format!("cannot execute mount: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "SquashFS mount failed for {} with status {status}",
+            card.name
+        ))
+    }
 }

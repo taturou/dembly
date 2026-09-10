@@ -10,6 +10,9 @@ fn runtime_config_reads_resolved_card_paths_without_deck_manifests() {
     ).unwrap();
 
     let config = load_runtime_config(&path).unwrap();
-    assert_eq!(config.cards[0].image.to_string_lossy(), "/run/dembly/cards/clang.squashfs");
+    assert_eq!(
+        config.cards[0].image.to_string_lossy(),
+        "/run/dembly/cards/clang.squashfs"
+    );
     assert_eq!(config.process_argv, ["/bin/sh", "-c", "sleep 1"]);
 }

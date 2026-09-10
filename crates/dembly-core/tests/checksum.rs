@@ -15,7 +15,17 @@ fn checksum_verification_accepts_matching_file_and_rejects_mismatch() {
     let card = load_card(&manifest).unwrap();
     verify_card_filesystem(&manifest, &card).unwrap();
 
-    fs::write(&manifest, fs::read_to_string(&manifest).unwrap().replace("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "0000000000000000000000000000000000000000000000000000000000000000")).unwrap();
+    fs::write(
+        &manifest,
+        fs::read_to_string(&manifest).unwrap().replace(
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ),
+    )
+    .unwrap();
     let card = load_card(&manifest).unwrap();
-    assert!(verify_card_filesystem(&manifest, &card).unwrap_err().to_string().contains("checksum mismatch"));
+    assert!(verify_card_filesystem(&manifest, &card)
+        .unwrap_err()
+        .to_string()
+        .contains("checksum mismatch"));
 }

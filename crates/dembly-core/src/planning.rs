@@ -24,7 +24,10 @@ pub struct MountResource {
 
 impl MountResource {
     pub fn new(owner: impl Into<String>, target: impl Into<PathBuf>) -> Self {
-        Self { owner: owner.into(), target: target.into() }
+        Self {
+            owner: owner.into(),
+            target: target.into(),
+        }
     }
 }
 
@@ -36,22 +39,52 @@ pub struct CardEnvironment {
 }
 
 impl CardEnvironment {
-    pub fn new(mount_root: impl Into<PathBuf>, values: BTreeMap<String, String>, path_prepend: Vec<String>) -> Self {
-        Self { mount_root: mount_root.into(), values, path_prepend }
+    pub fn new(
+        mount_root: impl Into<PathBuf>,
+        values: BTreeMap<String, String>,
+        path_prepend: Vec<String>,
+    ) -> Self {
+        Self {
+            mount_root: mount_root.into(),
+            values,
+            path_prepend,
+        }
     }
 }
 
 pub fn expand_bind_source(value: &str, variables: &BindVariables) -> Result<PathBuf, CoreError> {
-    expand(value, &[ ("HOST_HOME", variables.host_home.to_string_lossy().as_ref()), ("DECK_ROOT", variables.deck_root.to_string_lossy().as_ref()) ])
-        .map(PathBuf::from)
+    expand(
+        value,
+        &[
+            ("HOST_HOME", variables.host_home.to_string_lossy().as_ref()),
+            ("DECK_ROOT", variables.deck_root.to_string_lossy().as_ref()),
+        ],
+    )
+    .map(PathBuf::from)
 }
 
 pub fn expand_bind_target(value: &str, variables: &BindVariables) -> Result<PathBuf, CoreError> {
-    expand(value, &[ ("USER", variables.user.as_str()), ("HOME", variables.home.as_str()) ]).map(PathBuf::from)
+    expand(
+        value,
+        &[
+            ("USER", variables.user.as_str()),
+            ("HOME", variables.home.as_str()),
+        ],
+    )
+    .map(PathBuf::from)
 }
 
-pub fn resolve_volume_path(deck_root: &Path, owner: &VolumeOwner, name: &str, shared: bool) -> Result<PathBuf, CoreError> {
-    if name.is_empty() || !name.chars().all(|character| character.is_ascii_alphanumeric() || character == '_') {
+pub fn resolve_volume_path(
+    deck_root: &Path,
+    owner: &VolumeOwner,
+    name: &str,
+    shared: bool,
+) -> Result<PathBuf, CoreError> {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
         return Err(domain_error(format!("invalid Volume name: {name}")));
     }
     let base = deck_root.join("volumes");
@@ -65,12 +98,16 @@ pub fn resolve_volume_path(deck_root: &Path, owner: &VolumeOwner, name: &str, sh
     })
 }
 
-pub fn validate_shared_volume_consistency(declarations: &[(String, bool)]) -> Result<(), CoreError> {
+pub fn validate_shared_volume_consistency(
+    declarations: &[(String, bool)],
+) -> Result<(), CoreError> {
     let mut states = BTreeMap::new();
     for (name, shared) in declarations {
         if let Some(previous) = states.insert(name, shared) {
             if previous != shared {
-                return Err(domain_error(format!("Volume {name} mixes shared=true and shared=false")));
+                return Err(domain_error(format!(
+                    "Volume {name} mixes shared=true and shared=false"
+                )));
             }
         }
     }
@@ -81,10 +118,17 @@ pub fn validate_mount_targets(resources: &[MountResource]) -> Result<(), CoreErr
     let mut seen = BTreeMap::new();
     for resource in resources {
         if !resource.target.is_absolute() {
-            return Err(domain_error(format!("mount target must be absolute: {}", resource.target.display())));
+            return Err(domain_error(format!(
+                "mount target must be absolute: {}",
+                resource.target.display()
+            )));
         }
         if let Some(previous) = seen.insert(&resource.target, &resource.owner) {
-            return Err(domain_error(format!("mount target collision at {} between {previous} and {}", resource.target.display(), resource.owner)));
+            return Err(domain_error(format!(
+                "mount target collision at {} between {previous} and {}",
+                resource.target.display(),
+                resource.owner
+            )));
         }
     }
     Ok(())
@@ -109,12 +153,24 @@ pub fn plan_environment(
         base.extend(card.values.clone());
         for entry in &card.path_prepend {
             let path = Path::new(entry);
-            path_entries.push(if path.is_absolute() { path.to_path_buf() } else { card.mount_root.join(path) }.to_string_lossy().into_owned());
+            path_entries.push(
+                if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    card.mount_root.join(path)
+                }
+                .to_string_lossy()
+                .into_owned(),
+            );
         }
     }
     path_entries.extend(deck_path_prepend.iter().cloned());
-    if !base_path.is_empty() { path_entries.push(base_path); }
-    if !path_entries.is_empty() { base.insert("PATH".into(), path_entries.join(":")); }
+    if !base_path.is_empty() {
+        path_entries.push(base_path);
+    }
+    if !path_entries.is_empty() {
+        base.insert("PATH".into(), path_entries.join(":"));
+    }
     Ok(base)
 }
 
@@ -124,10 +180,16 @@ fn expand(value: &str, bindings: &[(&str, &str)]) -> Result<String, CoreError> {
     while let Some(start) = remaining.find('$') {
         result.push_str(&remaining[..start]);
         let suffix = &remaining[start..];
-        let Some(close) = suffix.find('}') else { return Err(domain_error(format!("invalid variable syntax: {value}"))); };
-        if !suffix.starts_with("${") { return Err(domain_error(format!("invalid variable syntax: {value}"))); }
+        let Some(close) = suffix.find('}') else {
+            return Err(domain_error(format!("invalid variable syntax: {value}")));
+        };
+        if !suffix.starts_with("${") {
+            return Err(domain_error(format!("invalid variable syntax: {value}")));
+        }
         let name = &suffix[2..close];
-        let replacement = bindings.iter().find_map(|(candidate, replacement)| (*candidate == name).then_some(*replacement))
+        let replacement = bindings
+            .iter()
+            .find_map(|(candidate, replacement)| (*candidate == name).then_some(*replacement))
             .ok_or_else(|| domain_error(format!("undefined bind variable: {name}")))?;
         result.push_str(replacement);
         remaining = &suffix[close + 1..];

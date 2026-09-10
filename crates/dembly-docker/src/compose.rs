@@ -12,7 +12,10 @@ pub struct ComposeRuntimePlan {
 pub fn compose_override(plan: &ComposeRuntimePlan) -> String {
     let mut mounts = vec![
         format!("{}:/run/dembly/bin/dembly:ro", plan.executable.display()),
-        format!("{}:/run/dembly/runtime.toml:ro", plan.runtime_config.display()),
+        format!(
+            "{}:/run/dembly/runtime.toml:ro",
+            plan.runtime_config.display()
+        ),
     ];
     mounts.extend(plan.mounts.iter().map(|(source, target, read_only)| {
         let mode = if *read_only { "ro" } else { "rw" };
@@ -27,7 +30,11 @@ pub fn compose_override(plan: &ComposeRuntimePlan) -> String {
     }
     document.push_str("    labels:\n");
     for (key, value) in &plan.labels {
-        document.push_str(&format!("      {}: \"{}\"\n", yaml_string(key), yaml_string(value)));
+        document.push_str(&format!(
+            "      {}: \"{}\"\n",
+            yaml_string(key),
+            yaml_string(value)
+        ));
     }
     document
 }

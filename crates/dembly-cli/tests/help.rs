@@ -24,7 +24,8 @@ fn card_build_non_interactive_rejects_missing_required_options() {
 
 #[test]
 fn validate_checks_card_manifest_and_filesystem_from_deck_root() {
-    let directory = std::env::temp_dir().join(format!("dembly-cli-validate-{}", std::process::id()));
+    let directory =
+        std::env::temp_dir().join(format!("dembly-cli-validate-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(directory.join("cards/clang")).unwrap();
     std::fs::write(directory.join("cards/clang/rootfs.squashfs"), b"abc").unwrap();
@@ -42,7 +43,11 @@ fn validate_checks_card_manifest_and_filesystem_from_deck_root() {
         .current_dir(&directory)
         .output()
         .expect("dembly should start");
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
 }
 
 #[test]
@@ -54,9 +59,17 @@ fn inspect_displays_deck_name_base_and_card_without_runtime() {
     std::fs::write(directory.join("cards/clang/card.toml"), "schema_version = 1\nname = \"clang\"\nversion = \"20\"\n[filesystem]\ntype = \"squashfs\"\nfile = \"rootfs.squashfs\"\nsha256 = \"x\"\n[mount]\ntarget = \"/opt/dembly/cards/clang\"\n").unwrap();
     std::fs::write(directory.join("deck.toml"), "schema_version = 1\nname = \"example\"\n[base]\nimage = \"alpine:3.20\"\n[[cards]]\npath = \"cards/clang/card.toml\"\n").unwrap();
 
-    let result = std::process::Command::new(env!("CARGO_BIN_EXE_dembly")).arg("inspect").current_dir(&directory).output().unwrap();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_dembly"))
+        .arg("inspect")
+        .current_dir(&directory)
+        .output()
+        .unwrap();
     let stdout = String::from_utf8(result.stdout).unwrap();
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     assert!(stdout.contains("Deck: example"));
     assert!(stdout.contains("Image Base: alpine:3.20"));
     assert!(stdout.contains("Card: clang 20"));
