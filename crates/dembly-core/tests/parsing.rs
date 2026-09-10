@@ -41,6 +41,19 @@ fn card_parser_reads_required_squashfs_fields() {
 }
 
 #[test]
+fn card_parser_accepts_generated_environment_path_entries() {
+    let directory = temporary_directory("card-environment-path");
+    let card = directory.join("card.toml");
+    write(
+        &card,
+        "schema_version = 1\nname = \"clang\"\nversion = \"20.1.0\"\n[filesystem]\ntype = \"squashfs\"\nfile = \"rootfs.squashfs\"\nsha256 = \"abc\"\n[mount]\ntarget = \"/opt/dembly/cards/clang\"\n[environment_path]\nprepend = [\"bin\", \"tools/bin\"]\n",
+    );
+
+    let card = load_card(&card).unwrap();
+    assert_eq!(card.environment_path_prepend, ["bin", "tools/bin"]);
+}
+
+#[test]
 fn discovery_does_not_search_parent_directories() {
     let root = temporary_directory("discovery");
     write(&root.join("deck.toml"), "schema_version = 1\nname = \"root\"\n[base]\nimage = \"alpine\"\n");

@@ -24,6 +24,7 @@ pub struct CardDocument {
     pub version: String,
     pub filesystem: Filesystem,
     pub mount: CardMount,
+    pub environment_path_prepend: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

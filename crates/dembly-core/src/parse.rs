@@ -40,12 +40,23 @@ pub fn load_deck(path: &Path) -> Result<DeckDocument, CoreError> {
 
 pub fn load_card(path: &Path) -> Result<CardDocument, CoreError> {
     let tables = read_tables(path)?;
-    reject_unknown_tables(path, &tables, &["filesystem", "mount"])?;
+    reject_unknown_tables(path, &tables, &["filesystem", "mount", "environment_path"])?;
     reject_unknown_fields(path, "root", &tables.root, &["schema_version", "name", "version"])?;
     let filesystem = one_table(path, &tables, "filesystem")?;
     reject_unknown_fields(path, "filesystem", filesystem, &["type", "file", "sha256"])?;
     let mount = one_table(path, &tables, "mount")?;
     reject_unknown_fields(path, "mount", mount, &["target"])?;
+    let environment_path_prepend = match tables.tables.get("environment_path") {
+        None => Vec::new(),
+        Some(tables) if tables.len() == 1 => {
+            reject_unknown_fields(path, "environment_path", &tables[0], &["prepend"])?;
+            match tables[0].get("prepend") {
+                None => Vec::new(),
+                Some(value) => parse_string_array(path, value)?,
+            }
+        }
+        _ => return Err(CoreError::parse(path, "[environment_path] may occur only once")),
+    };
 
     Ok(CardDocument {
         schema_version: parse_u32(path, required(path, &tables.root, "schema_version")?, "schema_version")?,
@@ -57,6 +68,7 @@ pub fn load_card(path: &Path) -> Result<CardDocument, CoreError> {
             sha256: required(path, filesystem, "sha256")?.to_owned(),
         },
         mount: CardMount { target: required(path, mount, "target")?.to_owned() },
+        environment_path_prepend,
     })
 }
 
@@ -105,11 +117,23 @@ fn read_tables(path: &Path) -> Result<Tables, CoreError> {
 fn parse_scalar(path: &Path, value: &str, line: usize) -> Result<String, CoreError> {
     if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
         Ok(value[1..value.len() - 1].to_owned())
-    } else if value == "true" || value == "false" || value.chars().all(|character| character.is_ascii_digit()) {
+    } else if (value.starts_with('[') && value.ends_with(']')) || value == "true" || value == "false" || value.chars().all(|character| character.is_ascii_digit()) {
         Ok(value.to_owned())
     } else {
         Err(CoreError::parse(path, format!("line {line} has an unsupported TOML scalar")))
     }
+}
+
+fn parse_string_array(path: &Path, value: &str) -> Result<Vec<String>, CoreError> {
+    let Some(inner) = value.strip_prefix('[').and_then(|value| value.strip_suffix(']')) else {
+        return Err(CoreError::parse(path, "array must use [..] syntax"));
+    };
+    if inner.trim().is_empty() { return Ok(Vec::new()); }
+    inner.split(',').map(|entry| {
+        let entry = entry.trim();
+        entry.strip_prefix('"').and_then(|entry| entry.strip_suffix('"')).map(str::to_owned)
+            .ok_or_else(|| CoreError::parse(path, "array entries must be quoted strings"))
+    }).collect()
 }
 
 fn one_table<'a>(path: &Path, tables: &'a Tables, name: &str) -> Result<&'a BTreeMap<String, String>, CoreError> {
