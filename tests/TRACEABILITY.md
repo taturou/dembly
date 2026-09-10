@@ -6,10 +6,10 @@
 | REQ-DCK-002 to REQ-DCK-004 | `discovery_does_not_search_parent_directories` | Unit tested |
 | REQ-CFG-004 | `deck_parser_rejects_unknown_fields` | Unit tested |
 | REQ-CRD-040 to REQ-CRD-041 | `checksum_verification_accepts_matching_file_and_rejects_mismatch` | Unit tested |
-| REQ-BND-001 to REQ-BND-007 | `bind_variables_are_scoped_by_source_and_target` | Unit tested |
-| REQ-VOL-011 to REQ-VOL-021 | `volume_layout_distinguishes_private_and_shared_card_volumes`, `mixed_shared_volume_declarations_are_rejected` | Unit tested |
+| REQ-BND-001 to REQ-BND-007 | `bind_variables_are_scoped_by_source_and_target`, `image_base_card_runs_without_host_squashfs_mount` | Unit and Image Runtime integration tested |
+| REQ-VOL-011 to REQ-VOL-021 | `volume_layout_distinguishes_private_and_shared_card_volumes`, `mixed_shared_volume_declarations_are_rejected`, `image_base_card_runs_without_host_squashfs_mount` | Unit and Image Runtime persistence integration tested |
 | REQ-MNT-001 to REQ-MNT-002 | `exact_mount_target_collision_is_rejected_but_nested_targets_are_allowed` | Unit tested |
-| REQ-ENV-001 to REQ-ENV-012 | `card_environment_overrides_deck_and_path_preserves_card_order`, `duplicate_card_environment_keys_are_rejected` | Unit tested |
+| REQ-ENV-001 to REQ-ENV-012 | `card_environment_overrides_deck_and_path_preserves_card_order`, `duplicate_card_environment_keys_are_rejected`, `image_base_card_runs_without_host_squashfs_mount` | Unit and Image Runtime integration tested |
 | REQ-CBL-021 | `non_interactive_build_requires_name_and_version_without_prompting` | Unit tested |
 | REQ-CBL-010, REQ-CBL-011, REQ-DOD-015 | `card_build_interactive_creates_an_artifact_from_prompted_values` | Docker-independent integration tested |
 | REQ-RST-004, REQ-IMG-003 | `image_runtime_plan_binds_same_binary_and_card_files_read_only` | Unit tested |
