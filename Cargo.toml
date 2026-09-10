@@ -1,0 +1,14 @@
+[workspace]
+members = [
+    "crates/dembly-card",
+    "crates/dembly-cli",
+    "crates/dembly-core",
+    "crates/dembly-docker",
+    "crates/dembly-runtime",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+rust-version = "1.75"
