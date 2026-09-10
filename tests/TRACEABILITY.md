@@ -28,7 +28,22 @@
 | IT-001, IT-003, IT-006 to IT-008, IT-010, IT-014, IT-019 to IT-020, IT-022, IT-027, IT-029 to IT-033, IT-035 | Image Runtime fixture and `image_base_preserves_non_root_runtime_user` | Verified by `cargo test --workspace` on this Docker/SquashFS host |
 | IT-036, IT-038, IT-039 | `compose_base_runs_a_temporary_command_and_cleans_up` | Verified by `cargo test --workspace` on this Docker/Compose host |
 | IT-040 | `discovery_does_not_search_parent_directories` | Unit tested |
-| IT-002, IT-004 to IT-005, IT-009, IT-011 to IT-013, IT-015 to IT-018, IT-021, IT-023 to IT-026, IT-028, IT-034, IT-037 | Not implemented | Unverified |
+| IT-011 | `validate_rejects_duplicate_card_names_from_distinct_manifests` | Verified by `cargo test -p dembly-cli --test integration validate_rejects_duplicate_card_names_from_distinct_manifests` |
+| IT-012 | `validate_rejects_duplicate_export_targets` | Verified by `cargo test -p dembly-cli --test integration validate_rejects_duplicate_export_targets` |
+| IT-013 | `validate_rejects_exact_card_mount_target_collisions` | Verified by `cargo test -p dembly-cli --test integration validate_rejects_exact_card_mount_target_collisions` |
+| IT-002 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Two synthetic Cards are mounted at distinct targets and executable paths are verified in the Runtime |
+| IT-009 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | A failed post-mount hook prevents `dembly run` from starting the final command |
+| IT-034 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | A changed Card manifest is rejected by `run` until explicit `lock` refresh |
+| IT-028 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Selecting fewer Cards leaves the Docker Base image ID unchanged |
+| IT-037 | `compose_base_runs_a_temporary_command_and_cleans_up` | Non-selected `sidecar` remains command-executable after selected service Runtime initialization |
+| IT-025 | `validate_warns_and_skips_an_optional_missing_bind` | Missing `required = false` bind emits warning and validation succeeds |
+| IT-026 | `validate_rejects_a_required_missing_bind` | Missing required bind makes validation fail |
+| IT-021, IT-023 to IT-024 | `inspect_expands_host_and_runtime_bind_variables` | `${HOST_HOME}`, `${USER}`, `${HOME}` are expanded into resolved bind paths |
+| IT-015 to IT-016 | `inspect_uses_private_card_and_shared_volume_layouts` | Private Card Volume and shared Volume resolve under their specified Deck-root layouts |
+| IT-017 | `validate_rejects_mixed_shared_volume_declarations` | Mixed shared/private declarations for one name are rejected |
+| IT-018 | `validate_rejects_a_symlinked_volume_path` | A physical Volume symlink is rejected |
+| IT-005 | `image_base_executes_a_symlink_from_a_card_filesystem` | A relative executable symlink inside a Card SquashFS resolves and runs in the Runtime |
+| IT-004 | `image_base_executes_a_mmap_backed_executable_from_a_card_filesystem` | A static executable that calls `mmap(2)` runs from a Card SquashFS in the Runtime |
 | REQ-DOD-006 to REQ-DOD-016 | Image/Compose lifecycle とテスト専用 Card acceptance | Verified |
 
 `cargo test --workspace` covers the unit tests listed above.
