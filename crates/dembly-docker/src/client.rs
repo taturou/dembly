@@ -128,6 +128,16 @@ pub fn compose_service_image(compose: &std::path::Path, service: &str) -> Result
     }
 }
 
+pub fn compose_status(
+    arguments: &[std::ffi::OsString],
+) -> Result<std::process::ExitStatus, String> {
+    Command::new("docker")
+        .arg("compose")
+        .args(arguments)
+        .status()
+        .map_err(|error| format!("cannot execute docker compose: {error}"))
+}
+
 fn inspect_lines(reference: &str, template: &str) -> Result<Vec<String>, String> {
     let output = Command::new("docker")
         .args(["image", "inspect", "--format", template, reference])

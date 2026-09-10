@@ -2,6 +2,7 @@ use std::os::unix::process::CommandExt;
 use std::process::ExitCode;
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
     fs,
     io::{self, Write},
     os::unix::fs::PermissionsExt,
@@ -75,6 +76,143 @@ fn main() -> ExitCode {
 
     eprintln!("dembly: command is not implemented yet");
     ExitCode::from(2)
+}
+
+fn up_compose(resolved: &dembly_core::ResolvedDeck, compose: &str, service: &str) -> ExitCode {
+    let compose_path = resolved.root.join(compose);
+    let image = match dembly_docker::compose_service_image(&compose_path, service) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let image_config = match dembly_docker::inspect_image(&image) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Err(error) = enforce_compose_lock(resolved, compose, service, &image_config.id)
+        .and_then(|_| verify_cards(resolved))
+    {
+        eprintln!("dembly up: {error}");
+        return ExitCode::from(2);
+    }
+    let process = image_config
+        .entrypoint
+        .iter()
+        .chain(&image_config.command)
+        .cloned()
+        .collect::<Vec<_>>();
+    if process.is_empty() {
+        eprintln!("dembly up: Compose service image has no original Entrypoint or Cmd");
+        return ExitCode::from(2);
+    }
+    let user = match runtime_user(&image_config.user) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Err(error) = create_volumes(resolved) {
+        eprintln!("dembly up: {error}");
+        return ExitCode::from(2);
+    }
+    let state = match runtime_state(&resolved.root, &resolved.document.name) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let runtime_config = state.join("runtime.toml");
+    if let Err(error) = fs::write(
+        &runtime_config,
+        render_runtime_config(
+            resolved,
+            &user,
+            &planned_environment(resolved, &image_config.environment),
+            &process,
+        ),
+    ) {
+        eprintln!("dembly up: cannot write runtime metadata: {error}");
+        return ExitCode::from(2);
+    }
+    let executable = match std::env::current_exe() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly up: cannot resolve current executable: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut mounts = resolved
+        .cards
+        .iter()
+        .map(|card| {
+            (
+                card.manifest_path
+                    .parent()
+                    .unwrap()
+                    .join(&card.document.filesystem.file),
+                format!("/run/dembly/cards/{}.squashfs", card.document.name),
+                true,
+            )
+        })
+        .collect::<Vec<_>>();
+    mounts.extend(resolved.volumes.iter().map(|volume| {
+        (
+            volume.source.clone(),
+            volume.target.to_string_lossy().into_owned(),
+            false,
+        )
+    }));
+    mounts.extend(resolved.binds.iter().map(|bind| {
+        (
+            bind.source.clone(),
+            bind.target.to_string_lossy().into_owned(),
+            bind.mode == "ro",
+        )
+    }));
+    let override_path = state.join("compose.override.yaml");
+    let override_file = dembly_docker::compose_override(&dembly_docker::ComposeRuntimePlan {
+        service: service.into(),
+        executable,
+        runtime_config,
+        mounts,
+        labels: managed_labels(&resolved.document.name),
+    });
+    if let Err(error) = fs::write(&override_path, override_file) {
+        eprintln!("dembly up: cannot write Compose override: {error}");
+        return ExitCode::from(2);
+    }
+    let project = format!("dembly-{}", resolved.document.name);
+    let arguments = vec![
+        OsString::from("-p"),
+        OsString::from(&project),
+        OsString::from("-f"),
+        compose_path.into_os_string(),
+        OsString::from("-f"),
+        override_path.into_os_string(),
+        OsString::from("up"),
+        OsString::from("-d"),
+    ];
+    match dembly_docker::compose_status(&arguments) {
+        Ok(status) if status.success() => {
+            println!("started {project}");
+            ExitCode::SUCCESS
+        }
+        Ok(status) => {
+            eprintln!("dembly up: docker compose up failed with status {status}");
+            ExitCode::from(2)
+        }
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            ExitCode::from(2)
+        }
+    }
 }
 
 fn inspect(arguments: &[String]) -> ExitCode {
@@ -395,9 +533,8 @@ fn up(arguments: &[String]) -> ExitCode {
     };
     let image = match &resolved.document.base {
         dembly_core::Base::Image { image } => image,
-        dembly_core::Base::Compose { .. } => {
-            eprintln!("dembly up: Compose Base lifecycle is not implemented yet");
-            return ExitCode::from(2);
+        dembly_core::Base::Compose { compose, service } => {
+            return up_compose(&resolved, compose, service)
         }
     };
     let image_config = match dembly_docker::inspect_image(image) {
@@ -1089,6 +1226,54 @@ fn enforce_image_lock(resolved: &dembly_core::ResolvedDeck, image_id: &str) -> R
     };
     if &reference != image || resolved_image_id != image_id {
         return Err("stale deck.lock Base image identity; run dembly lock".into());
+    }
+    if lock.cards.len() != resolved.cards.len() {
+        return Err("stale deck.lock Card set; run dembly lock".into());
+    }
+    for (locked, card) in lock.cards.iter().zip(&resolved.cards) {
+        let manifest =
+            dembly_core::sha256_file(&card.manifest_path).map_err(|error| error.to_string())?;
+        if locked.name != card.document.name
+            || locked.version != card.document.version
+            || locked.manifest_sha256 != manifest
+            || locked.filesystem_sha256 != card.document.filesystem.sha256
+        {
+            return Err("stale deck.lock Card identity; run dembly lock".into());
+        }
+    }
+    Ok(())
+}
+
+fn enforce_compose_lock(
+    resolved: &dembly_core::ResolvedDeck,
+    compose: &str,
+    service: &str,
+    image_id: &str,
+) -> Result<(), String> {
+    let path = resolved.root.join("deck.lock");
+    let lock = dembly_core::read_lock(&path).map_err(|_| {
+        format!(
+            "missing or invalid deck.lock; run dembly lock ({})",
+            path.display()
+        )
+    })?;
+    let dembly_core::LockBase::Compose {
+        compose: locked_compose,
+        service: locked_service,
+        compose_sha256,
+        resolved_image_id,
+    } = lock.base
+    else {
+        return Err("Deck lock Base kind does not match Compose Base Deck".into());
+    };
+    let actual_sha256 = dembly_core::sha256_file(&resolved.root.join(compose))
+        .map_err(|error| error.to_string())?;
+    if locked_compose != compose
+        || locked_service != service
+        || compose_sha256 != actual_sha256
+        || resolved_image_id != image_id
+    {
+        return Err("stale deck.lock Compose identity; run dembly lock".into());
     }
     if lock.cards.len() != resolved.cards.len() {
         return Err("stale deck.lock Card set; run dembly lock".into());
