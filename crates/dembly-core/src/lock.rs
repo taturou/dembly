@@ -16,6 +16,12 @@ pub enum LockBase {
         reference: String,
         resolved_image_id: String,
     },
+    Compose {
+        compose: String,
+        service: String,
+        compose_sha256: String,
+        resolved_image_id: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28,11 +34,14 @@ pub struct LockedCard {
 }
 
 pub fn write_lock(path: &Path, lock: &DeckLock) -> Result<(), CoreError> {
-    let LockBase::Image {
-        reference,
-        resolved_image_id,
-    } = &lock.base;
-    let mut document = format!("schema_version = {}\n\n[base]\nkind = \"image\"\nreference = \"{reference}\"\nresolved_image_id = \"{resolved_image_id}\"\n", lock.schema_version);
+    let base = match &lock.base {
+        LockBase::Image { reference, resolved_image_id } => format!("kind = \"image\"\nreference = \"{reference}\"\nresolved_image_id = \"{resolved_image_id}\""),
+        LockBase::Compose { compose, service, compose_sha256, resolved_image_id } => format!("kind = \"compose\"\ncompose = \"{compose}\"\nservice = \"{service}\"\ncompose_sha256 = \"{compose_sha256}\"\nresolved_image_id = \"{resolved_image_id}\""),
+    };
+    let mut document = format!(
+        "schema_version = {}\n\n[base]\n{base}\n",
+        lock.schema_version
+    );
     for card in &lock.cards {
         document.push_str(&format!("\n[[cards]]\nname = \"{}\"\nversion = \"{}\"\nsource = \"{}\"\nmanifest_sha256 = \"{}\"\nfilesystem_sha256 = \"{}\"\n", card.name, card.version, card.source, card.manifest_sha256, card.filesystem_sha256));
     }
@@ -95,12 +104,6 @@ pub fn read_lock(path: &Path) -> Result<DeckLock, CoreError> {
     if let Some(card) = current_card {
         cards.push(card);
     }
-    if base.get("kind").map(String::as_str) != Some("image") {
-        return Err(CoreError::parse(
-            path,
-            "only image lock bases are supported",
-        ));
-    }
     let cards = cards
         .into_iter()
         .map(|card| {
@@ -117,9 +120,18 @@ pub fn read_lock(path: &Path) -> Result<DeckLock, CoreError> {
         schema_version: required(path, &root, "schema_version")?
             .parse()
             .map_err(|_| CoreError::parse(path, "lock schema_version must be an integer"))?,
-        base: LockBase::Image {
-            reference: required(path, &base, "reference")?,
-            resolved_image_id: required(path, &base, "resolved_image_id")?,
+        base: match required(path, &base, "kind")?.as_str() {
+            "image" => LockBase::Image {
+                reference: required(path, &base, "reference")?,
+                resolved_image_id: required(path, &base, "resolved_image_id")?,
+            },
+            "compose" => LockBase::Compose {
+                compose: required(path, &base, "compose")?,
+                service: required(path, &base, "service")?,
+                compose_sha256: required(path, &base, "compose_sha256")?,
+                resolved_image_id: required(path, &base, "resolved_image_id")?,
+            },
+            _ => return Err(CoreError::parse(path, "lock has unsupported Base kind")),
         },
         cards,
     })

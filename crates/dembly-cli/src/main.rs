@@ -278,18 +278,46 @@ fn lock(arguments: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let reference = match &resolved.document.base {
-        dembly_core::Base::Image { image } => image,
-        dembly_core::Base::Compose { .. } => {
-            eprintln!("dembly lock: Compose Base lock is not implemented yet");
-            return ExitCode::from(2);
-        }
-    };
-    let image_id = match dembly_docker::image_identity(reference) {
-        Ok(identity) => identity,
-        Err(error) => {
-            eprintln!("dembly lock: {error}");
-            return ExitCode::from(2);
+    let base = match &resolved.document.base {
+        dembly_core::Base::Image { image } => match dembly_docker::image_identity(image) {
+            Ok(identity) => dembly_core::LockBase::Image {
+                reference: image.clone(),
+                resolved_image_id: identity,
+            },
+            Err(error) => {
+                eprintln!("dembly lock: {error}");
+                return ExitCode::from(2);
+            }
+        },
+        dembly_core::Base::Compose { compose, service } => {
+            let compose_path = resolved.root.join(compose);
+            let image = match dembly_docker::compose_service_image(&compose_path, service) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("dembly lock: {error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let image_id = match dembly_docker::image_identity(&image) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("dembly lock: {error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let compose_sha256 = match dembly_core::sha256_file(&compose_path) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("dembly lock: {error}");
+                    return ExitCode::from(2);
+                }
+            };
+            dembly_core::LockBase::Compose {
+                compose: compose.clone(),
+                service: service.clone(),
+                compose_sha256,
+                resolved_image_id: image_id,
+            }
         }
     };
     let mut cards = Vec::new();
@@ -322,10 +350,7 @@ fn lock(arguments: &[String]) -> ExitCode {
     }
     let lock = dembly_core::DeckLock {
         schema_version: 1,
-        base: dembly_core::LockBase::Image {
-            reference: reference.clone(),
-            resolved_image_id: image_id,
-        },
+        base,
         cards,
     };
     let path = resolved.root.join("deck.lock");
@@ -1055,7 +1080,10 @@ fn enforce_image_lock(resolved: &dembly_core::ResolvedDeck, image_id: &str) -> R
     let dembly_core::LockBase::Image {
         reference,
         resolved_image_id,
-    } = lock.base;
+    } = lock.base
+    else {
+        return Err("Deck lock Base kind does not match Image Base Deck".into());
+    };
     let dembly_core::Base::Image { image } = &resolved.document.base else {
         return Err("Deck lock Base kind does not match Deck".into());
     };
