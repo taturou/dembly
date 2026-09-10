@@ -3,6 +3,7 @@
 mod checksum;
 mod discovery;
 mod error;
+mod lock;
 mod model;
 mod parse;
 mod planning;
@@ -10,6 +11,7 @@ mod planning;
 pub use discovery::discover_deck;
 pub use checksum::verify_card_filesystem;
 pub use error::CoreError;
+pub use lock::{read_lock, write_lock, DeckLock, LockBase, LockedCard};
 pub use model::{Base, CardDocument, CardMount, CardReference, DeckDocument, Filesystem};
 pub use parse::{load_card, load_deck};
 pub use planning::{
