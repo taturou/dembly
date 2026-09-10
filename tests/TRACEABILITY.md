@@ -4,7 +4,7 @@
 | --- | --- | --- |
 | REQ-DOD-001 to REQ-DOD-003 | `scripts/setup-dev.sh` を連続 2 回実行 | Verified; mise install、Rust target/component setup、prerequisite check は idempotent |
 | REQ-PER-001 to REQ-PER-003, REQ-DSK-001, REQ-DOD-017 | README の `Evaluation procedure` | Representative workload の 5 回 median、overhead target、disk comparison method を文書化 |
-| REQ-DOD-016 | `scripts/accept-real-cards.sh` | Artifact-provided environment で `validate`、`lock`、`check`、追加 runtime command を実行可能。実 artifact 未提供のため未実測 |
+| REQ-DOD-016 | `scripts/accept-real-cards.sh`, `image_base_card_runs_without_host_squashfs_mount` | Fixture で `validate`、`lock`、`check`、追加 runtime command を end-to-end verified。実 artifact は未提供 |
 | REQ-DCK-002 to REQ-DCK-004 | `discovery_does_not_search_parent_directories` | Unit tested |
 | REQ-CFG-004 | `deck_parser_rejects_unknown_fields` | Unit tested |
 | REQ-CRD-040 to REQ-CRD-041 | `checksum_verification_accepts_matching_file_and_rejects_mismatch`, `image_base_card_runs_without_host_squashfs_mount` | Unit and pre-Runtime integration tested |
