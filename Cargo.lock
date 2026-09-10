@@ -12,6 +12,7 @@ version = "0.1.0"
 dependencies = [
  "dembly-card",
  "dembly-core",
+ "dembly-docker",
  "dembly-runtime",
 ]
 

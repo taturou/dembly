@@ -19,24 +19,7 @@ pub fn verify_card_filesystem(manifest_path: &Path, card: &CardDocument) -> Resu
             format!("missing SquashFS: {}", artifact.display()),
         ));
     }
-    let output = Command::new("sha256sum")
-        .arg(&artifact)
-        .output()
-        .map_err(|error| {
-            CoreError::parse(manifest_path, format!("cannot calculate checksum: {error}"))
-        })?;
-    if !output.status.success() {
-        return Err(CoreError::parse(
-            manifest_path,
-            format!("checksum command failed: {}", output.status),
-        ));
-    }
-    let actual = String::from_utf8(output.stdout)
-        .map_err(|_| CoreError::parse(manifest_path, "checksum command emitted non-UTF-8 output"))?
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_owned();
+    let actual = sha256_file(&artifact)?;
     if actual != card.filesystem.sha256 {
         return Err(CoreError::parse(
             manifest_path,
@@ -47,4 +30,23 @@ pub fn verify_card_filesystem(manifest_path: &Path, card: &CardDocument) -> Resu
         ));
     }
     Ok(())
+}
+
+pub fn sha256_file(path: &Path) -> Result<String, CoreError> {
+    let output = Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .map_err(|error| CoreError::parse(path, format!("cannot calculate checksum: {error}")))?;
+    if !output.status.success() {
+        return Err(CoreError::parse(
+            path,
+            format!("checksum command failed: {}", output.status),
+        ));
+    }
+    Ok(String::from_utf8(output.stdout)
+        .map_err(|_| CoreError::parse(path, "checksum command emitted non-UTF-8 output"))?
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_owned())
 }

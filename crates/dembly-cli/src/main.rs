@@ -45,6 +45,9 @@ fn main() -> ExitCode {
     if argument == "validate" {
         return validate(&arguments[1..]);
     }
+    if argument == "lock" {
+        return lock(&arguments[1..]);
+    }
     if argument == "inspect" {
         return inspect(&arguments[1..]);
     }
@@ -214,6 +217,96 @@ fn validate(arguments: &[String]) -> ExitCode {
     }
     println!("Deck {} is valid", resolved.document.name);
     ExitCode::SUCCESS
+}
+
+fn lock(arguments: &[String]) -> ExitCode {
+    if arguments.len() > 1 {
+        eprintln!("dembly lock accepts at most one deck.toml path");
+        return ExitCode::from(2);
+    }
+    let current_directory = match std::env::current_dir() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("dembly lock: cannot determine current directory: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let explicit = arguments.first().map(PathBuf::from);
+    let deck_path = match dembly_core::discover_deck(explicit.as_deref(), &current_directory) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("dembly lock: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let resolved = match dembly_core::resolve_deck(&deck_path, &bind_variables(&deck_path)) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            eprintln!("dembly lock: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let reference = match &resolved.document.base {
+        dembly_core::Base::Image { image } => image,
+        dembly_core::Base::Compose { .. } => {
+            eprintln!("dembly lock: Compose Base lock is not implemented yet");
+            return ExitCode::from(2);
+        }
+    };
+    let image_id = match dembly_docker::image_identity(reference) {
+        Ok(identity) => identity,
+        Err(error) => {
+            eprintln!("dembly lock: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut cards = Vec::new();
+    for card in &resolved.cards {
+        if let Err(error) = dembly_core::verify_card_filesystem(&card.manifest_path, &card.document)
+        {
+            eprintln!("dembly lock: {error}");
+            return ExitCode::from(2);
+        }
+        let manifest_sha256 = match dembly_core::sha256_file(&card.manifest_path) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("dembly lock: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        let source = card
+            .manifest_path
+            .strip_prefix(&resolved.root)
+            .unwrap_or(&card.manifest_path)
+            .to_string_lossy()
+            .into_owned();
+        cards.push(dembly_core::LockedCard {
+            name: card.document.name.clone(),
+            version: card.document.version.clone(),
+            source,
+            manifest_sha256,
+            filesystem_sha256: card.document.filesystem.sha256.clone(),
+        });
+    }
+    let lock = dembly_core::DeckLock {
+        schema_version: 1,
+        base: dembly_core::LockBase::Image {
+            reference: reference.clone(),
+            resolved_image_id: image_id,
+        },
+        cards,
+    };
+    let path = resolved.root.join("deck.lock");
+    match dembly_core::write_lock(&path, &lock) {
+        Ok(()) => {
+            println!("wrote {}", path.display());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("dembly lock: {error}");
+            ExitCode::from(2)
+        }
+    }
 }
 
 fn bind_variables(deck_path: &std::path::Path) -> dembly_core::BindVariables {

@@ -9,7 +9,7 @@ mod parse;
 mod planning;
 mod resolution;
 
-pub use checksum::verify_card_filesystem;
+pub use checksum::{sha256_file, verify_card_filesystem};
 pub use discovery::discover_deck;
 pub use error::CoreError;
 pub use lock::{read_lock, write_lock, DeckLock, LockBase, LockedCard};
