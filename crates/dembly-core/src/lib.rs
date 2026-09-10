@@ -1,5 +1,6 @@
 //! Dembly domain model and resolution.
 
+mod checksum;
 mod discovery;
 mod error;
 mod model;
@@ -7,6 +8,7 @@ mod parse;
 mod planning;
 
 pub use discovery::discover_deck;
+pub use checksum::verify_card_filesystem;
 pub use error::CoreError;
 pub use model::{Base, CardDocument, CardMount, CardReference, DeckDocument, Filesystem};
 pub use parse::{load_card, load_deck};
