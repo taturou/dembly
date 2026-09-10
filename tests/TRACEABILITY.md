@@ -20,7 +20,7 @@
 | REQ-CMP-020 to REQ-CMP-034 | `up_compose`, `down_compose`, `run_compose`, `exec_compose`, `check_compose` | Implemented; Compose integration unverified |
 | REQ-USR-001 to REQ-USR-007 | `runtime_probe`, `probe_image_user`, `runtime_user` | Implemented; image user probe integration unverified |
 | REQ-RUN-010 to REQ-RUN-011 | `runtime_command`, `create_exports`, `run_hooks` | Implemented; Runtime integration unverified |
-| IT-001, IT-003, IT-007, IT-027, IT-029, IT-030, IT-033 | `image_base_card_runs_without_host_squashfs_mount` | Implemented, ignored pending Docker/SquashFS prerequisites |
+| IT-001, IT-003, IT-007, IT-027, IT-029, IT-030, IT-033 | `image_base_card_runs_without_host_squashfs_mount` | Verified by `cargo test --workspace` on this Docker/SquashFS host |
 | IT-002, IT-004 to IT-006, IT-008 to IT-026, IT-028, IT-031 to IT-040 | Not implemented | Unverified |
 | REQ-DOD-006 to REQ-DOD-016 | lifecycle implementation exists; integration acceptance coverage remains incomplete | Partially verified |
 
