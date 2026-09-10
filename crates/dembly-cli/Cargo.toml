@@ -12,3 +12,4 @@ path = "src/main.rs"
 [dependencies]
 dembly-card = { path = "../dembly-card" }
 dembly-core = { path = "../dembly-core" }
+dembly-runtime = { path = "../dembly-runtime" }

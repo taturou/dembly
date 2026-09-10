@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 use std::{io::{self, Write}, path::PathBuf};
 use std::collections::BTreeSet;
+use std::os::unix::process::CommandExt;
 
 const PUBLIC_COMMANDS: &str = "\
 Dembly development environment orchestrator
@@ -38,9 +39,47 @@ fn main() -> ExitCode {
     if argument == "validate" {
         return validate(&arguments[1..]);
     }
+    if argument == "__runtime" {
+        return runtime_command(&arguments[1..]);
+    }
 
     eprintln!("dembly: command is not implemented yet");
     ExitCode::from(2)
+}
+
+fn runtime_command(arguments: &[String]) -> ExitCode {
+    if arguments.len() != 2 || arguments[0] != "init" {
+        eprintln!("dembly: invalid internal runtime command");
+        return ExitCode::from(2);
+    }
+    if unsafe { libc_geteuid() } != 0 {
+        eprintln!("dembly runtime: initializer must run as root");
+        return ExitCode::from(2);
+    }
+    let config = match dembly_runtime::load_runtime_config(&PathBuf::from(&arguments[1])) {
+        Ok(config) => config,
+        Err(error) => { eprintln!("dembly runtime: {error}"); return ExitCode::from(2); }
+    };
+    for card in &config.cards {
+        if let Err(error) = dembly_runtime::mount_card(card) {
+            eprintln!("dembly runtime: {error}");
+            return ExitCode::from(2);
+        }
+    }
+    let Some(program) = config.process_argv.first() else {
+        eprintln!("dembly runtime: process argv must not be empty");
+        return ExitCode::from(2);
+    };
+    let error = std::process::Command::new(program).args(&config.process_argv[1..]).exec();
+    eprintln!("dembly runtime: cannot exec {program}: {error}");
+    ExitCode::from(2)
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn libc_geteuid() -> u32 {
+    // SAFETY: geteuid has no arguments, no memory ownership contract, and is available on Linux.
+    extern "C" { fn geteuid() -> u32; }
+    unsafe { geteuid() }
 }
 
 fn validate(arguments: &[String]) -> ExitCode {
