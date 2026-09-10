@@ -10,6 +10,7 @@
 | REQ-MNT-001 to REQ-MNT-002 | `exact_mount_target_collision_is_rejected_but_nested_targets_are_allowed` | Unit tested |
 | REQ-ENV-001 to REQ-ENV-012 | `card_environment_overrides_deck_and_path_preserves_card_order`, `duplicate_card_environment_keys_are_rejected` | Unit tested |
 | REQ-CBL-021 | `non_interactive_build_requires_name_and_version_without_prompting` | Unit tested |
+| REQ-CBL-010, REQ-CBL-011, REQ-DOD-015 | `card_build_interactive_creates_an_artifact_from_prompted_values` | Docker-independent integration tested |
 | REQ-RST-004, REQ-IMG-003 | `image_runtime_plan_binds_same_binary_and_card_files_read_only` | Unit tested |
 | REQ-SQF-021 to REQ-SQF-024 | `runtime_mount_uses_external_read_only_kernel_squashfs_command` | Unit tested |
 | REQ-CMP-010 to REQ-CMP-011 | `compose_override_changes_only_selected_service_with_internal_entrypoint` | Unit tested |
