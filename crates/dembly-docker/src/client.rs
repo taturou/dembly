@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::compose_config::{parse_compose_service_config, ComposeServiceConfig};
 
@@ -68,6 +68,8 @@ pub fn run_docker(arguments: &[std::ffi::OsString]) -> Result<std::process::Exit
     let (program, args) = arguments.split_first().ok_or("Docker command is empty")?;
     Command::new(program)
         .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
         .status()
         .map_err(|error| format!("cannot execute Docker command: {error}"))
 }
@@ -75,6 +77,15 @@ pub fn run_docker(arguments: &[std::ffi::OsString]) -> Result<std::process::Exit
 pub fn docker_status(arguments: &[&str]) -> Result<std::process::ExitStatus, String> {
     Command::new("docker")
         .args(arguments)
+        .status()
+        .map_err(|error| format!("cannot execute docker: {error}"))
+}
+
+pub fn docker_status_quiet(arguments: &[&str]) -> Result<std::process::ExitStatus, String> {
+    Command::new("docker")
+        .args(arguments)
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
         .status()
         .map_err(|error| format!("cannot execute docker: {error}"))
 }

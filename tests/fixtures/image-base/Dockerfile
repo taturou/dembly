@@ -1,3 +1,2 @@
-FROM alpine:3.20
-RUN apk add --no-cache util-linux
+FROM alpine:3.21
 CMD ["sleep", "infinity"]

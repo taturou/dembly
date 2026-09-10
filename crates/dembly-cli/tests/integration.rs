@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
-#[ignore = "requires Docker registry access, Docker daemon, SquashFS, loop device, and musl target"]
 fn image_base_card_runs_without_host_squashfs_mount() {
     let root = temporary_directory();
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

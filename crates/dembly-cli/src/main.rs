@@ -808,7 +808,7 @@ fn up(arguments: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     }
-    match dembly_docker::docker_status(&["start", &name]) {
+    match dembly_docker::docker_status_quiet(&["start", &name]) {
         Ok(status) if status.success() => {
             println!("started {name}");
             ExitCode::SUCCESS
@@ -861,7 +861,7 @@ fn down(arguments: &[String]) -> ExitCode {
         eprintln!("dembly down: Runtime ownership label verification failed: {name}");
         return ExitCode::from(2);
     }
-    match dembly_docker::docker_status(&["rm", "-f", &name]) {
+    match dembly_docker::docker_status_quiet(&["rm", "-f", &name]) {
         Ok(status) if status.success() => {}
         Ok(status) => {
             eprintln!("dembly down: Docker remove failed with status {status}");
@@ -1220,7 +1220,7 @@ fn run_command(arguments: &[String]) -> ExitCode {
             2
         }
     };
-    if let Err(error) = dembly_docker::docker_status(&["rm", "-f", &name]) {
+    if let Err(error) = dembly_docker::docker_status_quiet(&["rm", "-f", &name]) {
         eprintln!("dembly run: temporary Runtime cleanup failed: {error}");
     }
     if let Err(error) = fs::remove_dir_all(&state) {
