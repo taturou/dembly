@@ -910,10 +910,7 @@ fn check_command(arguments: &[String]) -> ExitCode {
     };
     let image = match &resolved.document.base {
         dembly_core::Base::Image { image } => image,
-        dembly_core::Base::Compose { .. } => {
-            eprintln!("dembly check: Compose Base lifecycle is not implemented yet");
-            return ExitCode::from(2);
-        }
+        dembly_core::Base::Compose { .. } => return check_compose(&deck_path, &resolved),
     };
     let image_config = match dembly_docker::inspect_image(image) {
         Ok(value) => value,
@@ -945,6 +942,35 @@ fn check_command(arguments: &[String]) -> ExitCode {
         }
     }
     if failed {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn check_compose(deck_path: &std::path::Path, resolved: &dembly_core::ResolvedDeck) -> ExitCode {
+    let up_result = up(&[deck_path.to_string_lossy().into_owned()]);
+    if up_result != ExitCode::SUCCESS {
+        return up_result;
+    }
+    let mut failed = false;
+    for card in &resolved.cards {
+        let Some(check) = &card.document.check else {
+            continue;
+        };
+        let mut command = vec![
+            deck_path.to_string_lossy().into_owned(),
+            "--".into(),
+            format!("{}/{}", card.document.mount.target, check.exec),
+        ];
+        command.extend(check.args.iter().cloned());
+        println!("check {}", card.document.name);
+        if exec_command(&command) != ExitCode::SUCCESS {
+            failed = true;
+        }
+    }
+    let down_result = down(&[deck_path.to_string_lossy().into_owned()]);
+    if down_result != ExitCode::SUCCESS || failed {
         ExitCode::from(2)
     } else {
         ExitCode::SUCCESS
