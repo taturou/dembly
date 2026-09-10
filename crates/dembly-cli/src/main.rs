@@ -1,7 +1,10 @@
 use std::os::unix::process::CommandExt;
 use std::process::ExitCode;
 use std::{
+    collections::BTreeMap,
+    fs,
     io::{self, Write},
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
 };
 
@@ -47,6 +50,12 @@ fn main() -> ExitCode {
     }
     if argument == "lock" {
         return lock(&arguments[1..]);
+    }
+    if argument == "up" {
+        return up(&arguments[1..]);
+    }
+    if argument == "down" {
+        return down(&arguments[1..]);
     }
     if argument == "inspect" {
         return inspect(&arguments[1..]);
@@ -321,6 +330,435 @@ fn lock(arguments: &[String]) -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+fn up(arguments: &[String]) -> ExitCode {
+    if arguments.len() > 1 {
+        eprintln!("dembly up accepts at most one deck.toml path");
+        return ExitCode::from(2);
+    }
+    let current_directory = match std::env::current_dir() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("dembly up: cannot determine current directory: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let explicit = arguments.first().map(PathBuf::from);
+    let deck_path = match dembly_core::discover_deck(explicit.as_deref(), &current_directory) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let resolved = match dembly_core::resolve_deck(&deck_path, &bind_variables(&deck_path)) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let image = match &resolved.document.base {
+        dembly_core::Base::Image { image } => image,
+        dembly_core::Base::Compose { .. } => {
+            eprintln!("dembly up: Compose Base lifecycle is not implemented yet");
+            return ExitCode::from(2);
+        }
+    };
+    let image_config = match dembly_docker::inspect_image(image) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Err(error) = enforce_image_lock(&resolved, &image_config.id) {
+        eprintln!("dembly up: {error}");
+        return ExitCode::from(2);
+    }
+    if let Err(error) = verify_cards(&resolved) {
+        eprintln!("dembly up: {error}");
+        return ExitCode::from(2);
+    }
+    let process_argv = image_config
+        .entrypoint
+        .iter()
+        .chain(&image_config.command)
+        .cloned()
+        .collect::<Vec<_>>();
+    if process_argv.is_empty() {
+        eprintln!("dembly up: image has no original Entrypoint or Cmd");
+        return ExitCode::from(2);
+    }
+    let user = match runtime_user(&image_config.user) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let state = match runtime_state(&resolved.root, &resolved.document.name) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Err(error) = create_volumes(&resolved) {
+        eprintln!("dembly up: {error}");
+        return ExitCode::from(2);
+    }
+    let environment = planned_environment(&resolved, &image_config.environment);
+    let runtime_config = state.join("runtime.toml");
+    if let Err(error) = fs::write(
+        &runtime_config,
+        render_runtime_config(&resolved, &user, &environment, &process_argv),
+    ) {
+        eprintln!(
+            "dembly up: cannot write {}: {error}",
+            runtime_config.display()
+        );
+        return ExitCode::from(2);
+    }
+    let executable = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("dembly up: cannot resolve current executable: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let name = format!("dembly-{}", resolved.document.name);
+    let labels = managed_labels(&resolved.document.name);
+    let cards = resolved
+        .cards
+        .iter()
+        .map(|card| dembly_docker::CardFileBind {
+            name: card.document.name.clone(),
+            source: card
+                .manifest_path
+                .parent()
+                .unwrap()
+                .join(&card.document.filesystem.file),
+        })
+        .collect();
+    let mut extra_mounts = resolved
+        .volumes
+        .iter()
+        .map(|volume| {
+            (
+                volume.source.clone(),
+                volume.target.to_string_lossy().into_owned(),
+                false,
+            )
+        })
+        .collect::<Vec<_>>();
+    extra_mounts.extend(resolved.binds.iter().map(|bind| {
+        (
+            bind.source.clone(),
+            bind.target.to_string_lossy().into_owned(),
+            bind.mode == "ro",
+        )
+    }));
+    let plan = dembly_docker::ImageRuntimePlan {
+        image: image.clone(),
+        container_name: name.clone(),
+        executable,
+        runtime_config,
+        cards,
+        labels,
+        extra_mounts,
+    };
+    match dembly_docker::run_docker(&dembly_docker::image_create_command(&plan)) {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            eprintln!("dembly up: Docker create failed with status {status}");
+            return ExitCode::from(2);
+        }
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            return ExitCode::from(2);
+        }
+    }
+    match dembly_docker::docker_status(&["start", &name]) {
+        Ok(status) if status.success() => {
+            println!("started {name}");
+            ExitCode::SUCCESS
+        }
+        Ok(status) => {
+            eprintln!("dembly up: Docker start failed with status {status}");
+            ExitCode::from(2)
+        }
+        Err(error) => {
+            eprintln!("dembly up: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn down(arguments: &[String]) -> ExitCode {
+    if arguments.len() > 1 {
+        eprintln!("dembly down accepts at most one deck.toml path");
+        return ExitCode::from(2);
+    }
+    let current_directory = match std::env::current_dir() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly down: cannot determine current directory: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let explicit = arguments.first().map(PathBuf::from);
+    let deck_path = match dembly_core::discover_deck(explicit.as_deref(), &current_directory) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly down: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let deck = match dembly_core::load_deck(&deck_path) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly down: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if !matches!(deck.base, dembly_core::Base::Image { .. }) {
+        eprintln!("dembly down: Compose Base lifecycle is not implemented yet");
+        return ExitCode::from(2);
+    }
+    let name = format!("dembly-{}", deck.name);
+    let managed = dembly_docker::container_label(&name, "io.dembly.managed");
+    let owner = dembly_docker::container_label(&name, "io.dembly.deck");
+    if managed.as_deref() != Ok("true") || owner.as_deref() != Ok(deck.name.as_str()) {
+        eprintln!("dembly down: Runtime ownership label verification failed: {name}");
+        return ExitCode::from(2);
+    }
+    match dembly_docker::docker_status(&["rm", "-f", &name]) {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            eprintln!("dembly down: Docker remove failed with status {status}");
+            return ExitCode::from(2);
+        }
+        Err(error) => {
+            eprintln!("dembly down: {error}");
+            return ExitCode::from(2);
+        }
+    }
+    let root = deck_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    if let Ok(state) = runtime_state(root, &deck.name) {
+        if let Err(error) = fs::remove_dir_all(&state) {
+            eprintln!(
+                "dembly down: cannot remove Runtime metadata {}: {error}",
+                state.display()
+            );
+            return ExitCode::from(2);
+        }
+    }
+    println!("stopped {name}");
+    ExitCode::SUCCESS
+}
+
+#[derive(Clone)]
+struct RuntimeUser {
+    name: String,
+    uid: u32,
+    gid: u32,
+    home: String,
+}
+
+fn runtime_user(configured: &str) -> Result<RuntimeUser, String> {
+    if configured.is_empty() || configured == "root" || configured == "0" || configured == "0:0" {
+        return Ok(RuntimeUser {
+            name: "root".into(),
+            uid: 0,
+            gid: 0,
+            home: "/root".into(),
+        });
+    }
+    let mut values = configured.split(':');
+    let uid = values.next().unwrap_or_default().parse::<u32>().map_err(|_| format!("cannot resolve named image user {configured}; only root or numeric UID:GID is currently supported"))?;
+    let gid = values
+        .next()
+        .map(str::parse)
+        .transpose()
+        .map_err(|_| format!("invalid image GID in {configured}"))?
+        .unwrap_or(uid);
+    if values.next().is_some() {
+        return Err(format!("invalid image user: {configured}"));
+    }
+    Ok(RuntimeUser {
+        name: uid.to_string(),
+        uid,
+        gid,
+        home: "/".into(),
+    })
+}
+
+fn verify_cards(resolved: &dembly_core::ResolvedDeck) -> Result<(), String> {
+    for card in &resolved.cards {
+        dembly_core::verify_card_filesystem(&card.manifest_path, &card.document)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+fn create_volumes(resolved: &dembly_core::ResolvedDeck) -> Result<(), String> {
+    for volume in &resolved.volumes {
+        if volume.source.is_symlink() {
+            return Err(format!(
+                "Volume physical path is a symlink: {}",
+                volume.source.display()
+            ));
+        }
+        fs::create_dir_all(&volume.source).map_err(|error| {
+            format!("cannot create Volume {}: {error}", volume.source.display())
+        })?;
+    }
+    Ok(())
+}
+fn managed_labels(deck: &str) -> Vec<(String, String)> {
+    vec![
+        ("io.dembly.managed".into(), "true".into()),
+        ("io.dembly.deck".into(), deck.into()),
+        ("io.dembly.schema".into(), "1".into()),
+    ]
+}
+fn runtime_state(deck_root: &std::path::Path, deck_name: &str) -> Result<PathBuf, String> {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .unwrap_or_else(std::env::temp_dir);
+    let state = base
+        .join("dembly")
+        .join(current_uid().to_string())
+        .join(deck_name);
+    if state.starts_with(deck_root.join("volumes")) {
+        return Err("Runtime metadata must not be stored below Deck volumes".into());
+    }
+    fs::create_dir_all(&state)
+        .map_err(|error| format!("cannot create Runtime state directory: {error}"))?;
+    fs::set_permissions(&state, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("cannot protect Runtime state directory: {error}"))?;
+    Ok(state)
+}
+
+fn current_uid() -> u32 {
+    // SAFETY: getuid has no arguments or ownership contract and is available on Linux.
+    unsafe extern "C" {
+        fn getuid() -> u32;
+    }
+    // SAFETY: getuid has no arguments and cannot fail.
+    unsafe { getuid() }
+}
+fn planned_environment(
+    resolved: &dembly_core::ResolvedDeck,
+    base: &[String],
+) -> BTreeMap<String, String> {
+    let mut values = BTreeMap::new();
+    for entry in base {
+        if let Some((key, value)) = entry.split_once('=') {
+            values.insert(key.into(), value.into());
+        }
+    }
+    let cards = resolved
+        .cards
+        .iter()
+        .map(|card| {
+            dembly_core::CardEnvironment::new(
+                &card.document.mount.target,
+                card.document.environment.clone(),
+                card.document.environment_path_prepend.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    dembly_core::plan_environment(
+        values,
+        resolved.document.environment.clone(),
+        &cards,
+        &resolved.document.environment_path_prepend,
+    )
+    .unwrap_or_default()
+}
+fn render_runtime_config(
+    resolved: &dembly_core::ResolvedDeck,
+    user: &RuntimeUser,
+    environment: &BTreeMap<String, String>,
+    argv: &[String],
+) -> String {
+    let mut output = format!("schema_version = 1\ndeck_name = \"{}\"\n[runtime_user]\nname = \"{}\"\nuid = {}\ngid = {}\nhome = \"{}\"\n", toml(&resolved.document.name), toml(&user.name), user.uid, user.gid, toml(&user.home));
+    for card in &resolved.cards {
+        output.push_str(&format!("[[cards]]\nname = \"{}\"\nimage = \"/run/dembly/cards/{}.squashfs\"\nmount_target = \"{}\"\n", toml(&card.document.name), toml(&card.document.name), toml(&card.document.mount.target)));
+        for export in &card.document.exports {
+            output.push_str(&format!(
+                "[[exports]]\nsource = \"{}\"\ntarget = \"{}\"\n",
+                toml(&format!("{}/{}", card.document.mount.target, export.source)),
+                toml(&export.target)
+            ));
+        }
+        for hook in &card.document.post_mount_hooks {
+            output.push_str(&format!(
+                "[[hooks]]\ncard = \"{}\"\nexec = \"{}\"\nargs = {}\n",
+                toml(&card.document.name),
+                toml(&format!("{}/{}", card.document.mount.target, hook.exec)),
+                toml_array(&hook.args)
+            ));
+        }
+    }
+    output.push_str("[environment]\n");
+    for (key, value) in environment {
+        output.push_str(&format!("{} = \"{}\"\n", key, toml(value)));
+    }
+    output.push_str(&format!("[process]\nargv = {}\n", toml_array(argv)));
+    output
+}
+fn toml(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+fn toml_array(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| format!("\"{}\"", toml(value)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+fn enforce_image_lock(resolved: &dembly_core::ResolvedDeck, image_id: &str) -> Result<(), String> {
+    let path = resolved.root.join("deck.lock");
+    let lock = dembly_core::read_lock(&path).map_err(|_| {
+        format!(
+            "missing or invalid deck.lock; run dembly lock ({})",
+            path.display()
+        )
+    })?;
+    let dembly_core::LockBase::Image {
+        reference,
+        resolved_image_id,
+    } = lock.base;
+    let dembly_core::Base::Image { image } = &resolved.document.base else {
+        return Err("Deck lock Base kind does not match Deck".into());
+    };
+    if &reference != image || resolved_image_id != image_id {
+        return Err("stale deck.lock Base image identity; run dembly lock".into());
+    }
+    if lock.cards.len() != resolved.cards.len() {
+        return Err("stale deck.lock Card set; run dembly lock".into());
+    }
+    for (locked, card) in lock.cards.iter().zip(&resolved.cards) {
+        let manifest =
+            dembly_core::sha256_file(&card.manifest_path).map_err(|error| error.to_string())?;
+        if locked.name != card.document.name
+            || locked.version != card.document.version
+            || locked.manifest_sha256 != manifest
+            || locked.filesystem_sha256 != card.document.filesystem.sha256
+        {
+            return Err("stale deck.lock Card identity; run dembly lock".into());
+        }
+    }
+    Ok(())
 }
 
 fn bind_variables(deck_path: &std::path::Path) -> dembly_core::BindVariables {

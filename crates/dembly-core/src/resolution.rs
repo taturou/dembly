@@ -55,7 +55,7 @@ pub fn resolve_deck(
         .to_path_buf();
     let deck = load_deck(&path)?;
     validate_schema(&path, deck.schema_version, "Deck")?;
-    if deck.name.is_empty() {
+    if deck.name.is_empty() || deck.name.contains('/') || deck.name.contains("..") {
         return Err(error("Deck name must not be empty"));
     }
     match &deck.base {
