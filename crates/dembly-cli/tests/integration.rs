@@ -44,11 +44,12 @@ fn image_base_card_runs_without_host_squashfs_mount() {
     fs::write(
         &manifest_path,
         format!(
-            "{manifest}\n[[exports]]\nsource = \"bin/hello\"\ntarget = \"/usr/local/bin/hello\"\n\n[[hooks.post_mount]]\nexec = \"setup/post-mount.sh\"\n"
+            "{manifest}\n[environment]\nHELLO_ENV = \"enabled\"\n\n[[exports]]\nsource = \"bin/hello\"\ntarget = \"/usr/local/bin/hello\"\n\n[[hooks.post_mount]]\nexec = \"setup/post-mount.sh\"\n"
         ),
     )
     .unwrap();
-    fs::write(root.join("deck.toml"), format!("schema_version = 1\nname = \"fixture-{}\"\n[base]\nimage = \"{tag}\"\n[[cards]]\npath = \"cards/hello/card.toml\"\n", std::process::id())).unwrap();
+    fs::write(root.join("host-input"), b"host-input\n").unwrap();
+    fs::write(root.join("deck.toml"), format!("schema_version = 1\nname = \"fixture-{}\"\n[base]\nimage = \"{tag}\"\n[[cards]]\npath = \"cards/hello/card.toml\"\n[[volumes]]\nname = \"cache\"\ntarget = \"/work/cache\"\n[[binds]]\nsource = \"${{DECK_ROOT}}/host-input\"\ntarget = \"/work/input\"\nmode = \"ro\"\n", std::process::id())).unwrap();
 
     run(Command::new(&binary).current_dir(&root).arg("validate"));
     run(Command::new(&binary).current_dir(&root).arg("lock"));
@@ -63,6 +64,20 @@ fn image_base_card_runs_without_host_squashfs_mount() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello-card");
+    let second_output = Command::new(&binary)
+        .current_dir(&root)
+        .args(["run", "--", "/usr/local/bin/hello"])
+        .output()
+        .unwrap();
+    assert!(
+        second_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second_output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("volumes/cache/result")).unwrap(),
+        "persisted\npersisted\n"
+    );
     let host_mounts = fs::read_to_string("/proc/self/mountinfo").unwrap();
     assert!(!host_mounts.contains("/opt/dembly/cards/hello"));
     let _ = Command::new("docker")

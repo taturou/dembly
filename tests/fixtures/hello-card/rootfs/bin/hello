@@ -1,3 +1,6 @@
 #!/bin/sh
 [ -f /tmp/dembly-hello-card-hook ] || exit 2
+[ "$(cat /work/input)" = "host-input" ] || exit 3
+[ "${HELLO_ENV:-}" = "enabled" ] || exit 4
+printf '%s\n' persisted >> /work/cache/result
 printf '%s\n' hello-card
