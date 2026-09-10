@@ -22,7 +22,7 @@ pub fn compose_override(plan: &ComposeRuntimePlan) -> String {
         format!("{}:{target}:{mode}", source.display())
     }));
     let mut document = format!(
-        "services:\n  {}:\n    privileged: true\n    user: \"0:0\"\n    entrypoint: [\"/run/dembly/bin/dembly\", \"__runtime\", \"init\", \"/run/dembly/runtime.toml\"]\n    volumes:\n",
+        "services:\n  {}:\n    privileged: true\n    user: \"0:0\"\n    entrypoint: [\"/run/dembly/bin/dembly\", \"__runtime\", \"init\", \"/run/dembly/runtime.toml\"]\n    command: []\n    volumes:\n",
         yaml_string(&plan.service),
     );
     for mount in mounts {

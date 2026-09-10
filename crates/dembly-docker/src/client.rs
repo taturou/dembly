@@ -237,7 +237,7 @@ pub fn compose_service_container(
     let output = Command::new("docker")
         .arg("compose")
         .args(arguments)
-        .args(["ps", "-q", service])
+        .args(["ps", "--all", "-q", service])
         .output()
         .map_err(|error| format!("cannot execute docker compose ps: {error}"))?;
     if !output.status.success() {

@@ -18,6 +18,7 @@ fn compose_override_changes_only_selected_service_with_internal_entrypoint() {
     assert!(override_file.contains("services:\n  dev:"));
     assert!(override_file.contains("privileged: true"));
     assert!(override_file.contains("entrypoint: [\"/run/dembly/bin/dembly\", \"__runtime\", \"init\", \"/run/dembly/runtime.toml\"]"));
+    assert!(override_file.contains("command: []"));
     assert!(override_file.contains("/host/dembly:/run/dembly/bin/dembly:ro"));
     assert!(!override_file.contains("database:"));
 }
