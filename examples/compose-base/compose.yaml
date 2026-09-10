@@ -1,0 +1,8 @@
+services:
+  dev:
+    image: alpine:3.20
+    command: ["sleep", "infinity"]
+  database:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: example

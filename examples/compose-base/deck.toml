@@ -1,0 +1,6 @@
+schema_version = 1
+name = "compose-example"
+
+[base]
+compose = "compose.yaml"
+service = "dev"

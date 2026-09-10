@@ -1,0 +1,19 @@
+schema_version = 1
+name = "image-example"
+
+[base]
+image = "dembly-fixture-base:local"
+
+[[cards]]
+path = "cards/hello/card.toml"
+
+[[volumes]]
+name = "build"
+target = "/workspace/build"
+shared = false
+
+[[binds]]
+source = "${DECK_ROOT}"
+target = "/workspace"
+mode = "rw"
+required = true
