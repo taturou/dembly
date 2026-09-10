@@ -147,6 +147,61 @@ fn image_base_card_runs_without_host_squashfs_mount() {
 }
 
 #[test]
+fn image_base_preserves_non_root_runtime_user() {
+    let root = temporary_directory();
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let image_dockerfile = repository.join("tests/fixtures/nonroot-base");
+    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+    let tag = format!("dembly-nonroot-fixture-{}", std::process::id());
+    let deck_name = format!("nonroot-fixture-{}", std::process::id());
+
+    run(Command::new("cargo").current_dir(&repository).args([
+        "build",
+        "--release",
+        "--target",
+        "x86_64-unknown-linux-musl",
+        "-p",
+        "dembly-cli",
+    ]));
+    run(Command::new("docker").args(["build", "-t", &tag, image_dockerfile.to_str().unwrap()]));
+    fs::write(
+        root.join("deck.toml"),
+        format!("schema_version = 1\nname = \"{deck_name}\"\n[base]\nimage = \"{tag}\"\n"),
+    )
+    .unwrap();
+
+    run(Command::new(&binary).current_dir(&root).arg("lock"));
+    let run_output = Command::new(&binary)
+        .current_dir(&root)
+        .args(["run", "--", "id", "-u"])
+        .output()
+        .unwrap();
+    assert!(
+        run_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run_output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run_output.stdout).trim(), "65534");
+    run(Command::new(&binary).current_dir(&root).arg("up"));
+    let exec_output = Command::new(&binary)
+        .current_dir(&root)
+        .args(["exec", "--", "id", "-u"])
+        .output()
+        .unwrap();
+    assert!(
+        exec_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&exec_output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&exec_output.stdout).trim(), "65534");
+    run(Command::new(&binary).current_dir(&root).arg("down"));
+    let _ = Command::new("docker")
+        .args(["image", "rm", "-f", &tag])
+        .status();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn compose_base_runs_a_temporary_command_and_cleans_up() {
     let root = temporary_directory();
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
