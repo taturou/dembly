@@ -63,6 +63,9 @@ fn main() -> ExitCode {
     if argument == "run" {
         return run_command(&arguments[1..]);
     }
+    if argument == "check" {
+        return check_command(&arguments[1..]);
+    }
     if argument == "inspect" {
         return inspect(&arguments[1..]);
     }
@@ -565,6 +568,76 @@ fn down(arguments: &[String]) -> ExitCode {
     }
     println!("stopped {name}");
     ExitCode::SUCCESS
+}
+
+fn check_command(arguments: &[String]) -> ExitCode {
+    if arguments.len() > 1 {
+        eprintln!("dembly check accepts at most one deck.toml path");
+        return ExitCode::from(2);
+    }
+    let current_directory = match std::env::current_dir() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly check: cannot determine current directory: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let explicit = arguments.first().map(PathBuf::from);
+    let deck_path = match dembly_core::discover_deck(explicit.as_deref(), &current_directory) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly check: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let resolved = match dembly_core::resolve_deck(&deck_path, &bind_variables(&deck_path)) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly check: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let image = match &resolved.document.base {
+        dembly_core::Base::Image { image } => image,
+        dembly_core::Base::Compose { .. } => {
+            eprintln!("dembly check: Compose Base lifecycle is not implemented yet");
+            return ExitCode::from(2);
+        }
+    };
+    let image_config = match dembly_docker::inspect_image(image) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("dembly check: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Err(error) =
+        enforce_image_lock(&resolved, &image_config.id).and_then(|_| verify_cards(&resolved))
+    {
+        eprintln!("dembly check: {error}");
+        return ExitCode::from(2);
+    }
+    let mut failed = false;
+    for card in &resolved.cards {
+        let Some(check) = &card.document.check else {
+            continue;
+        };
+        let mut run_arguments = vec![
+            deck_path.to_string_lossy().into_owned(),
+            "--".into(),
+            format!("{}/{}", card.document.mount.target, check.exec),
+        ];
+        run_arguments.extend(check.args.iter().cloned());
+        println!("check {}", card.document.name);
+        if run_command(&run_arguments) != ExitCode::SUCCESS {
+            failed = true;
+        }
+    }
+    if failed {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn run_command(arguments: &[String]) -> ExitCode {
