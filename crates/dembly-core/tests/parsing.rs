@@ -54,9 +54,38 @@ fn card_parser_accepts_generated_environment_path_entries() {
 }
 
 #[test]
+fn manifests_parse_volume_bind_export_hook_and_check_declarations() {
+    let directory = temporary_directory("full-manifests");
+    let card_path = directory.join("card.toml");
+    write(
+        &card_path,
+        "schema_version = 1\nname = \"clang\"\nversion = \"20.1.0\"\n[filesystem]\ntype = \"squashfs\"\nfile = \"rootfs.squashfs\"\nsha256 = \"abc\"\n[mount]\ntarget = \"/opt/dembly/cards/clang\"\n[environment]\nCLANG_RESOURCE = \"example\"\n[[exports]]\nsource = \"bin/clang\"\ntarget = \"/usr/local/bin/clang\"\n[[volumes]]\nname = \"cache\"\ntarget = \"/var/cache/clang\"\n[[binds]]\nsource = \"${HOST_HOME}/.config\"\ntarget = \"${HOME}/.config\"\nmode = \"ro\"\nrequired = false\n[[hooks.post_mount]]\nexec = \"setup/post-mount.sh\"\nargs = [\"--example\"]\n[check]\nexec = \"bin/clang\"\nargs = [\"--version\"]\n",
+    );
+    let card = load_card(&card_path).unwrap();
+    assert_eq!(card.environment["CLANG_RESOURCE"], "example");
+    assert_eq!(card.exports[0].target, "/usr/local/bin/clang");
+    assert!(!card.binds[0].required);
+    assert_eq!(card.post_mount_hooks[0].args, ["--example"]);
+    assert_eq!(card.check.unwrap().exec, "bin/clang");
+
+    let deck_path = directory.join("deck.toml");
+    write(
+        &deck_path,
+        "schema_version = 1\nname = \"example\"\n[base]\nimage = \"alpine:3.20\"\n[environment]\nMODE = \"development\"\n[environment_path]\nprepend = [\"/project/bin\"]\n[[volumes]]\nname = \"build\"\ntarget = \"/workspace/build\"\n[[binds]]\nsource = \".\"\ntarget = \"/workspace\"\nmode = \"rw\"\n",
+    );
+    let deck = load_deck(&deck_path).unwrap();
+    assert_eq!(deck.environment["MODE"], "development");
+    assert_eq!(deck.volumes[0].name, "build");
+    assert!(deck.binds[0].required);
+}
+
+#[test]
 fn discovery_does_not_search_parent_directories() {
     let root = temporary_directory("discovery");
-    write(&root.join("deck.toml"), "schema_version = 1\nname = \"root\"\n[base]\nimage = \"alpine\"\n");
+    write(
+        &root.join("deck.toml"),
+        "schema_version = 1\nname = \"root\"\n[base]\nimage = \"alpine\"\n",
+    );
     let child = root.join("child");
     fs::create_dir_all(&child).unwrap();
 
