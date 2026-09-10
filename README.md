@@ -110,7 +110,8 @@ Card は trusted artifact とし、root hook、Host Bind、container 内の moun
 これは untrusted Card の sandbox ではありません。
 secret source の内容を Runtime metadata や log へコピーしません。
 
-full Docker integration suite は Docker Hub への HTTP 407 により、この環境では未検証です。
+ローカル Alpine fixture による Image/Compose lifecycle integration は `cargo test --workspace` で検証済みです。
+`emcos-sdk`、`clang`、`tis` の実 artifact acceptance と performance measurement は、対象 artifact を利用できる環境で別途実行します。
 FUSE、Docker named volume、remote Card repository、dependency solver、署名、rootless Docker は PoC scope 外です。
 
 ## Compose Base
