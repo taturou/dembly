@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dembly_version='@VERSION@'
+repository='@REPOSITORY@'
+
+data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
+release_root="$data_home/dembly/releases/$dembly_version"
+active_link="$HOME/.local/bin/dembly"
+license_destination="$data_home/licenses/dembly/LICENSE"
+releases_directory="$data_home/dembly/releases"
+temporary_directory=''
+
+die() {
+  echo "dembly-install: $*" >&2
+  exit 1
+}
+
+is_semver() {
+  local numeric_identifier='(0|[1-9][0-9]*)'
+  local prerelease_identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+  local build_identifier='[0-9A-Za-z-]+'
+  [[ $1 =~ ^$numeric_identifier\.$numeric_identifier\.$numeric_identifier(-$prerelease_identifier(\.$prerelease_identifier)*)?(\+$build_identifier(\.$build_identifier)*)?$ ]]
+}
+
+release_is_valid() {
+  [[ -x "$release_root/dembly" ]] &&
+    [[ -f "$release_root/LICENSE" ]] &&
+    [[ $("$release_root/dembly" --version) == "$dembly_version" ]]
+}
+
+ensure_active_link_is_replaceable() {
+  if [[ -e "$active_link" || -L "$active_link" ]]; then
+    [[ -L "$active_link" ]] || die "refusing to replace non-symlink: $active_link"
+  fi
+}
+
+activate_release() {
+  ensure_active_link_is_replaceable
+  mkdir -p "$(dirname "$active_link")"
+  ln -sfnT "$release_root/dembly" "$active_link"
+}
+
+install_release() {
+  ensure_active_link_is_replaceable
+
+  if ! release_is_valid; then
+    temporary_directory=$(mktemp -d)
+    asset_name="dembly-v${dembly_version}-x86_64-unknown-linux-musl.tar.gz"
+    archive="$temporary_directory/$asset_name"
+    checksum="$temporary_directory/$asset_name.sha256"
+    release_url="https://github.com/$repository/releases/download/v$dembly_version"
+
+    curl -fsSL -o "$archive" "$release_url/$asset_name"
+    curl -fsSL -o "$checksum" "$release_url/$asset_name.sha256"
+    (
+      cd "$temporary_directory"
+      sha256sum --check "$(basename "$checksum")"
+    )
+    tar -xzf "$archive" -C "$temporary_directory"
+
+    extracted_release="$temporary_directory/dembly-v${dembly_version}-x86_64-unknown-linux-musl"
+    [[ -x "$extracted_release/dembly" ]] || die 'release archive does not contain an executable dembly'
+    [[ -f "$extracted_release/LICENSE" ]] || die 'release archive does not contain LICENSE'
+    [[ $("$extracted_release/dembly" --version) == "$dembly_version" ]] || die 'release binary version does not match installer version'
+
+    rm -rf -- "$release_root"
+    mkdir -p "$(dirname "$release_root")"
+    mv "$extracted_release" "$release_root"
+    rm -rf -- "$temporary_directory"
+    temporary_directory=''
+  fi
+
+  mkdir -p "$(dirname "$license_destination")"
+  cp "$release_root/LICENSE" "$license_destination"
+  activate_release
+}
+
+list_releases() {
+  [[ -d "$releases_directory" ]] || return 0
+
+  for candidate in "$releases_directory"/*; do
+    [[ -d "$candidate" ]] || continue
+    version=$(basename "$candidate")
+    [[ -x "$candidate/dembly" && -f "$candidate/LICENSE" ]] || continue
+    if [[ -L "$active_link" && $(readlink "$active_link") == "$candidate/dembly" ]]; then
+      printf '%s (active)\n' "$version"
+    else
+      printf '%s\n' "$version"
+    fi
+  done
+}
+
+uninstall_release() {
+  version=$1
+  is_semver "$version" || die "invalid SemVer: $version"
+  target_release="$data_home/dembly/releases/$version"
+  if [[ -L "$active_link" && $(readlink "$active_link") == "$target_release/dembly" ]]; then
+    die "refusing to uninstall active version: $version"
+  fi
+  rm -rf -- "$target_release"
+}
+
+purge() {
+  ensure_active_link_is_replaceable
+  rm -rf -- "$releases_directory"
+  rm -f -- "$license_destination"
+  rmdir "$(dirname "$license_destination")" 2>/dev/null || true
+  if [[ -L "$active_link" ]]; then
+    rm -- "$active_link"
+  fi
+}
+
+cleanup() {
+  [[ -z "$temporary_directory" ]] || rm -rf -- "$temporary_directory"
+}
+
+trap cleanup EXIT
+
+case ${1:-} in
+  '') install_release ;;
+  --list) list_releases ;;
+  --uninstall)
+    [[ $# -eq 2 ]] || die 'usage: dembly-install.sh --uninstall X.Y.Z'
+    uninstall_release "$2"
+    ;;
+  --purge)
+    [[ $# -eq 1 ]] || die 'usage: dembly-install.sh --purge'
+    purge
+    ;;
+  *) die 'usage: dembly-install.sh [--list | --uninstall X.Y.Z | --purge]' ;;
+esac
