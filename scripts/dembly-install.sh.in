@@ -8,6 +8,8 @@ data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
 release_root="$data_home/dembly/releases/$dembly_version"
 active_link="$HOME/.local/bin/dembly"
 license_destination="$data_home/licenses/dembly/LICENSE"
+license_directory="$data_home/licenses"
+license_management_directory="$license_directory/dembly"
 releases_directory="$data_home/dembly/releases"
 temporary_directory=''
 
@@ -43,6 +45,13 @@ ensure_release_paths_are_not_symlinks() {
   done
 }
 
+ensure_license_paths_are_not_symlinks() {
+  local managed_path
+  for managed_path in "$license_directory" "$license_management_directory"; do
+    [[ ! -L "$managed_path" ]] || die "refusing symlinked license path: $managed_path"
+  done
+}
+
 active_link_targets() {
   local target_binary=$1
   local resolved_active_link
@@ -61,6 +70,7 @@ activate_release() {
 install_release() {
   ensure_active_link_is_replaceable
   ensure_release_paths_are_not_symlinks "$release_root"
+  ensure_license_paths_are_not_symlinks
 
   if ! release_is_valid; then
     temporary_directory=$(mktemp -d)
@@ -89,7 +99,7 @@ install_release() {
     temporary_directory=''
   fi
 
-  mkdir -p "$(dirname "$license_destination")"
+  mkdir -p "$license_management_directory"
   cp "$release_root/LICENSE" "$license_destination"
   activate_release
 }
@@ -123,6 +133,7 @@ uninstall_release() {
 purge() {
   ensure_active_link_is_replaceable
   ensure_release_paths_are_not_symlinks "$release_root"
+  ensure_license_paths_are_not_symlinks
   rm -rf -- "$releases_directory"
   rm -f -- "$license_destination"
   rmdir "$(dirname "$license_destination")" 2>/dev/null || true

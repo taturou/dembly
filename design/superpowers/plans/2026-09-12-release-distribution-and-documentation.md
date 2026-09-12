@@ -20,6 +20,20 @@
 - README files must be complete English/Japanese counterparts with mutual links. The Japanese README uses one sentence per line.
 - Do not publish a tag or GitHub Release while implementing or testing.
 
+## Final whole-branch review fixes
+
+**Goal:** Keep release quality gates version-independent and make installer and release-script filesystem effects safe under adversarial local paths.
+
+**Files:** `crates/dembly-cli/tests/help.rs`, `scripts/dembly-install.sh.in`, `scripts/test-dembly-install.sh`, `scripts/release.sh`, and `scripts/test-release.sh`.
+
+1. First make the CLI test derive its expected newline-terminated version from `env!("CARGO_PKG_VERSION")`; run that focused Cargo test before and after the test edit.
+2. Add installer integration cases in which `licenses` and `licenses/dembly` are symlinks to an outside sentinel. Run the rendered installer and assert failure plus an unchanged sentinel. Then reject both paths before the license `mkdir` or `cp`.
+3. Add release-fixture assertions that `1.2.3+build-id` invokes `gh release create` without `--prerelease`, while `1.2.3-rc.1+build-id` includes it. Implement classification with the SemVer prerelease separator restricted to the core-version portion before `+` metadata.
+4. Add a dry-run quality-gate failure fixture and assert `git worktree list --porcelain` contains no temporary worktree afterwards. Implement worktree removal through a function-local `RETURN` trap so subshell failure cannot skip deregistration.
+5. Add normal-preflight fixture cases: an untracked ordinary file fails before authentication, and ignored `dist/`/`target/` paths do not fail. Implement a `git status --porcelain --untracked-files=all` check, preserving ignored files as allowed.
+
+**Verification:** Run both shell integration scripts, their `bash -n` checks, ShellCheck, focused CLI Cargo test, full locked Cargo tests, and a safe release dry-run when the local toolchain permits it. Commit all final review fixes together as one `fix(release): harden final distribution checks` commit with a Japanese body.
+
 ---
 
 ### Task 1: Centralize Cargo metadata and implement global version output

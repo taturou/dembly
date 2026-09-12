@@ -75,7 +75,10 @@ case $1 in
     shift
     case $1 in
       generate-lockfile) : >Cargo.lock ;;
-      fmt|clippy|test) : ;;
+      fmt)
+        [[ ${RELEASE_TEST_FAIL_QUALITY_GATE:-0} != 1 ]] || exit 1
+        ;;
+      clippy|test) : ;;
       build)
         target=''
         while (($#)); do
@@ -99,6 +102,7 @@ printf '%s\n' "$*" >>"$RELEASE_TEST_GH_LOG"
 case "$*" in
   'auth status') exit 0 ;;
   'release view '*) exit 1 ;;
+  'release create '*) exit 0 ;;
   *) echo "unexpected gh invocation: $*" >&2; exit 64 ;;
 esac
 EOF
@@ -107,8 +111,12 @@ chmod +x "$fake_bin/git" "$fake_bin/mise" "$fake_bin/gh"
 run_release() {
   (
     cd "$fixture"
-    PATH="$fake_bin:$PATH" RELEASE_TEST_REAL_GIT="$real_git" RELEASE_TEST_GIT_LOG="$git_log" RELEASE_TEST_GH_LOG="$gh_log" bash scripts/release.sh "$@"
+    PATH="$fake_bin:$PATH" RELEASE_TEST_FAIL_QUALITY_GATE="${RELEASE_TEST_FAIL_QUALITY_GATE:-0}" RELEASE_TEST_REAL_GIT="$real_git" RELEASE_TEST_GIT_LOG="$git_log" RELEASE_TEST_GH_LOG="$gh_log" bash scripts/release.sh "$@"
   )
+}
+
+worktree_count() {
+  git -C "$fixture" worktree list --porcelain | grep -c '^worktree ' || true
 }
 
 if run_release 1.2; then
@@ -141,6 +149,15 @@ run_release --dry-run 1.2.3
 ! grep -Eq '^(ls-remote|push|.* tag )' "$git_log" || fail 'dry-run inspected or published a remote tag'
 [[ ! -s "$gh_log" ]] || fail 'dry-run called GitHub CLI'
 
+# Break caught: a failed dry-run quality gate leaves a detached worktree registered.
+dry_worktree_count=$(worktree_count)
+export RELEASE_TEST_FAIL_QUALITY_GATE=1
+if run_release --dry-run; then
+  fail 'dry-run accepted a failed quality gate'
+fi
+unset RELEASE_TEST_FAIL_QUALITY_GATE
+[[ $(worktree_count) == "$dry_worktree_count" ]] || fail 'failed dry-run retained a worktree registration'
+
 mkdir -p "$fixture/dist"
 printf 'version=1.2.3\ntarget=%s\ncommit=wrong\nsha256=not-the-archive\n' "$target" >"$build_info"
 git -C "$fixture" add dist
@@ -155,6 +172,34 @@ if run_release; then
   fail 'normal release accepted a dirty checkout'
 fi
 git -C "$fixture" checkout -- Cargo.toml
+
+printf 'untracked\n' > "$fixture/untracked-release-input"
+if run_release; then
+  fail 'normal release accepted an untracked nonignored file'
+fi
+rm -- "$fixture/untracked-release-input"
+
+printf '/dist/\n/target/\n' > "$fixture/.gitignore"
+git -C "$fixture" rm -r --cached dist >/dev/null
+git -C "$fixture" add .gitignore
+git -C "$fixture" commit -m 'ignore release artifacts' >/dev/null
+git -C "$fixture" push >/dev/null
+mkdir -p "$fixture/dist" "$fixture/target"
+printf 'ignored\n' > "$fixture/dist/ignored-artifact"
+printf 'ignored\n' > "$fixture/target/ignored-artifact"
+: >"$gh_log"
+run_release
+grep -q '^release create v0.1.0 ' "$gh_log" || fail 'normal release rejected ignored dist or target artifacts'
+
+: >"$gh_log"
+run_release 1.2.3+build-id
+stable_release=$(grep '^release create v1.2.3+build-id ' "$gh_log") || fail 'build metadata release was not created'
+[[ $stable_release != *--prerelease* ]] || fail 'build metadata release was classified as prerelease'
+
+: >"$gh_log"
+run_release 1.2.3-rc.1+build-id
+grep -q '^release create v1.2.3-rc.1+build-id ' "$gh_log" || fail 'prerelease release was not created'
+grep -q -- '--prerelease' "$gh_log" || fail 'prerelease metadata was not classified as prerelease'
 
 git -C "$fixture" checkout -b review-non-main >/dev/null
 if run_release; then

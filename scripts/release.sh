@@ -78,7 +78,9 @@ verify_mise_environment() {
 
 ensure_normal_preflight() {
   [[ $(git branch --show-current) == main ]] || die 'normal release requires the main branch'
-  if ! git diff --quiet || ! git diff --cached --quiet; then
+  local worktree_status
+  worktree_status=$(git status --porcelain --untracked-files=all)
+  if ! git diff --quiet || ! git diff --cached --quiet || [[ -n $worktree_status ]]; then
     die 'normal release requires a clean worktree'
   fi
   git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null || die 'normal release requires origin/main'
@@ -97,12 +99,12 @@ ensure_only_version_files_changed() {
 }
 
 run_quality_gates() {
-  scripts/check-linux.sh
+  scripts/check-linux.sh || return 1
   # cargo fmt does not accept Cargo's --locked flag and does not resolve dependencies.
-  mise exec -- cargo fmt --check
-  mise exec -- cargo clippy --locked --all-targets --all-features -- -D warnings
-  mise exec -- cargo test --locked
-  mise exec -- cargo build --locked --release --target "$target" -p dembly-cli
+  mise exec -- cargo fmt --check || return 1
+  mise exec -- cargo clippy --locked --all-targets --all-features -- -D warnings || return 1
+  mise exec -- cargo test --locked || return 1
+  mise exec -- cargo build --locked --release --target "$target" -p dembly-cli || return 1
 }
 
 artifact_paths() {
@@ -168,15 +170,22 @@ trap cleanup EXIT
 
 run_in_dry_worktree() {
   local dry_version=${1:-}
+  local dry_status=0
   temporary_directory=$(mktemp -d)
   local dry_worktree="$temporary_directory/worktree"
   git worktree add --detach "$dry_worktree" HEAD >/dev/null
-  (
+  trap 'git worktree remove --force "$dry_worktree" >/dev/null 2>&1 || true' RETURN
+  if ! (
     cd "$dry_worktree"
     execute_release "$dry_worktree" 1 "$dry_version"
-  )
+  ); then
+    dry_status=1
+  fi
   git worktree remove --force "$dry_worktree"
+  rm -rf -- "$temporary_directory"
   temporary_directory=''
+  trap - RETURN
+  return "$dry_status"
 }
 
 ensure_publication_is_unused() {
@@ -184,6 +193,7 @@ ensure_publication_is_unused() {
   git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null && die "local tag already exists: $tag"
   git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1 && die "remote tag already exists: $tag"
   gh release view "$tag" >/dev/null 2>&1 && die "GitHub Release already exists: $tag"
+  return 0
 }
 
 commit_version_change() {
@@ -208,7 +218,9 @@ publish_release() {
 build_release_create_arguments() {
   local tag=$1
   release_create_arguments=(release create "$tag" "$archive" "$checksum" "$installer" --title "Dembly $tag" --notes 'Dembly for Linux x86_64. Install this exact version with the version-pinned installer. See LICENSE for distribution terms.')
-  [[ $version == *-* ]] && release_create_arguments+=(--prerelease)
+  if [[ ${version%%+*} == *-* ]]; then
+    release_create_arguments+=(--prerelease)
+  fi
 }
 
 release_create_command() {
@@ -243,14 +255,16 @@ execute_release() {
   fi
 
   verify_mise_environment
-  run_quality_gates
+  run_quality_gates || return 1
   if [[ $is_internal_dry_run != 1 && $version_changed == 1 ]]; then
     commit_version_change
   fi
   commit_sha=$(git rev-parse HEAD)
   package_artifacts "$execution_root"
 
-  [[ $is_internal_dry_run == 1 ]] && return
+  if [[ $is_internal_dry_run == 1 ]]; then
+    return
+  fi
   publish_release
 }
 
@@ -284,7 +298,7 @@ fi
 if [[ $mode == dry-run ]]; then
   [[ -z $version_argument ]] || is_semver "$version_argument" || die "invalid SemVer: $version_argument"
   run_in_dry_worktree "$version_argument"
-  exit 0
+  exit $?
 fi
 
 execute_release "$project_root" 0 "$version_argument"

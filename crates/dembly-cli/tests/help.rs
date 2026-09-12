@@ -5,7 +5,10 @@ fn global_version_is_bare_package_version() {
         .output()
         .expect("dembly should start");
     assert!(output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "0.1.0\n");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{}\n", env!("CARGO_PKG_VERSION"))
+    );
     assert!(output.stderr.is_empty());
 }
 

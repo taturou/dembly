@@ -51,13 +51,19 @@ sed \
   "$repo_root/scripts/dembly-install.sh.in" > "$installer"
 chmod +x "$installer"
 
-run_installer() {
+run_installer_in_data() {
+  local data_home=$1
+  shift
   HOME="$test_home" \
-    XDG_DATA_HOME="$test_data" \
+    XDG_DATA_HOME="$data_home" \
     PATH="$test_bin:$PATH" \
     FAKE_ARCHIVE="$archive" \
     FAKE_CHECKSUM="$checksum" \
     "$installer" "$@"
+}
+
+run_installer() {
+  run_installer_in_data "$test_data" "$@"
 }
 
 # Break caught: an install fails to verify, extract, and activate the release.
@@ -131,5 +137,29 @@ if run_installer --uninstall 1.2.3; then
   exit 1
 fi
 test -f "$outside_releases/1.2.3/sentinel"
+
+# Break caught: install follows a symlinked XDG licenses directory and overwrites an outside LICENSE.
+outside_licenses="$test_root/outside-licenses"
+licenses_link_data="$test_root/licenses-link-data"
+mkdir -p "$outside_licenses/dembly" "$licenses_link_data"
+printf 'keep\n' > "$outside_licenses/dembly/LICENSE"
+ln -s "$outside_licenses" "$licenses_link_data/licenses"
+if run_installer_in_data "$licenses_link_data"; then
+  echo 'expected symlinked licenses directory install to fail' >&2
+  exit 1
+fi
+test "$(<"$outside_licenses/dembly/LICENSE")" = 'keep'
+
+# Break caught: install follows a symlinked XDG licenses/dembly directory and overwrites an outside LICENSE.
+outside_license_management="$test_root/outside-license-management"
+license_management_link_data="$test_root/license-management-link-data"
+mkdir -p "$outside_license_management" "$license_management_link_data/licenses"
+printf 'keep\n' > "$outside_license_management/LICENSE"
+ln -s "$outside_license_management" "$license_management_link_data/licenses/dembly"
+if run_installer_in_data "$license_management_link_data"; then
+  echo 'expected symlinked licenses/dembly directory install to fail' >&2
+  exit 1
+fi
+test "$(<"$outside_license_management/LICENSE")" = 'keep'
 
 echo 'dembly installer tests passed'
