@@ -27,13 +27,13 @@ Dembly は信頼できない Card 用の sandbox を提供しません。
 最新版をインストールします。
 
 ```sh
-curl -fsSL https://github.com/taturou/dembly/releases/latest/download/dembly-install.sh | sh
+curl -fsSL https://github.com/taturou/dembly/releases/latest/download/dembly-install.sh | bash
 ```
 
 または、固定したリリースバージョンをインストールします。
 
 ```sh
-curl -fsSL https://github.com/taturou/dembly/releases/download/v1.2.3/dembly-install.sh | sh
+curl -fsSL https://github.com/taturou/dembly/releases/download/v1.2.3/dembly-install.sh | bash
 ```
 
 インストーラーはダウンロードしたリリース tarball を公開済み SHA-256 ファイルと照合し、リリースを `${XDG_DATA_HOME:-$HOME/.local/share}/dembly/releases` に保存します。

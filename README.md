@@ -17,13 +17,13 @@ Runtimes run privileged so that the Runtime can mount Card SquashFS files. Treat
 Requirements are Linux x86_64, Docker Engine with its daemon running, and Docker Compose v2. Install the latest release:
 
 ```sh
-curl -fsSL https://github.com/taturou/dembly/releases/latest/download/dembly-install.sh | sh
+curl -fsSL https://github.com/taturou/dembly/releases/latest/download/dembly-install.sh | bash
 ```
 
 Or install a fixed release version:
 
 ```sh
-curl -fsSL https://github.com/taturou/dembly/releases/download/v1.2.3/dembly-install.sh | sh
+curl -fsSL https://github.com/taturou/dembly/releases/download/v1.2.3/dembly-install.sh | bash
 ```
 
 The installer verifies the downloaded release tarball against its published SHA-256 file, stores releases under `${XDG_DATA_HOME:-$HOME/.local/share}/dembly/releases`, and updates `~/.local/bin/dembly` to the selected version. Ensure `~/.local/bin` is on `PATH`, then confirm the installed CLI:
