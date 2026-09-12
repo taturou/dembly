@@ -76,6 +76,14 @@ verify_mise_environment() {
   mise exec -- rustup component list --installed | grep -Eq '^rustfmt(-|$)' || die 'Rust rustfmt component is not installed through mise'
 }
 
+ensure_github_write_permission() {
+  local push_permission account
+  push_permission=$(gh api "repos/$repository" --jq '.permissions.push' 2>/dev/null) || die "could not determine GitHub CLI write permission for $repository"
+  [[ $push_permission == true ]] && return
+  account=$(gh api user --jq '.login' 2>/dev/null || printf 'unknown')
+  die "GitHub CLI account $account lacks push permission for $repository; authenticate gh with an account that has write access"
+}
+
 ensure_normal_preflight() {
   [[ $(git branch --show-current) == main ]] || die 'normal release requires the main branch'
   local worktree_status
@@ -87,6 +95,7 @@ ensure_normal_preflight() {
   [[ $(git rev-parse HEAD) == $(git rev-parse origin/main) ]] || die 'normal release requires HEAD to equal origin/main'
   require_command gh
   gh auth status >/dev/null 2>&1 || die 'GitHub CLI is not authenticated'
+  ensure_github_write_permission
 }
 
 ensure_only_version_files_changed() {

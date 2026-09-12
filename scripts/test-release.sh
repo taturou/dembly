@@ -101,6 +101,8 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$RELEASE_TEST_GH_LOG"
 case "$*" in
   'auth status') exit 0 ;;
+  'api repos/taturou/dembly --jq .permissions.push') printf '%s\n' "${RELEASE_TEST_GH_PUSH_PERMISSION:-true}" ;;
+  'api user --jq .login') printf '%s\n' release-test-user ;;
   'release view '*) exit 1 ;;
   'release create '*) exit 0 ;;
   *) echo "unexpected gh invocation: $*" >&2; exit 64 ;;
@@ -111,7 +113,7 @@ chmod +x "$fake_bin/git" "$fake_bin/mise" "$fake_bin/gh"
 run_release() {
   (
     cd "$fixture"
-    PATH="$fake_bin:$PATH" RELEASE_TEST_FAIL_QUALITY_GATE="${RELEASE_TEST_FAIL_QUALITY_GATE:-0}" RELEASE_TEST_REAL_GIT="$real_git" RELEASE_TEST_GIT_LOG="$git_log" RELEASE_TEST_GH_LOG="$gh_log" bash scripts/release.sh "$@"
+    PATH="$fake_bin:$PATH" RELEASE_TEST_FAIL_QUALITY_GATE="${RELEASE_TEST_FAIL_QUALITY_GATE:-0}" RELEASE_TEST_GH_PUSH_PERMISSION="${RELEASE_TEST_GH_PUSH_PERMISSION:-true}" RELEASE_TEST_REAL_GIT="$real_git" RELEASE_TEST_GIT_LOG="$git_log" RELEASE_TEST_GH_LOG="$gh_log" bash scripts/release.sh "$@"
   )
 }
 
@@ -187,6 +189,16 @@ git -C "$fixture" push >/dev/null
 mkdir -p "$fixture/dist" "$fixture/target"
 printf 'ignored\n' > "$fixture/dist/ignored-artifact"
 printf 'ignored\n' > "$fixture/target/ignored-artifact"
+: >"$gh_log"
+export RELEASE_TEST_GH_PUSH_PERMISSION=false
+if permission_output=$(run_release 1.2.3 2>&1); then
+  fail 'normal release accepted a GitHub CLI account without push permission'
+fi
+unset RELEASE_TEST_GH_PUSH_PERMISSION
+[[ $permission_output == *'GitHub CLI account release-test-user lacks push permission for taturou/dembly'* ]] || fail 'normal release did not explain GitHub CLI push permission failure'
+[[ ! -e "$fixture/.git/refs/tags/v1.2.3" ]] || fail 'GitHub CLI permission failure created a local tag'
+git --git-dir="$remote" rev-parse --verify --quiet refs/tags/v1.2.3 >/dev/null && fail 'GitHub CLI permission failure pushed a tag'
+
 : >"$gh_log"
 run_release
 grep -q '^release create v0.1.0 ' "$gh_log" || fail 'normal release rejected ignored dist or target artifacts'
