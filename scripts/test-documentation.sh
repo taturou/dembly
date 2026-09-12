@@ -24,17 +24,38 @@ reject() {
     fi
 }
 
-require_in_order() {
-    local previous=0
-    local heading
-    for heading in "$@"; do
-        local line
-        line=$(grep -nFx -- "$heading" "$readme" | head -n 1 | cut -d: -f1)
-        if [[ -z "$line" || "$line" -le "$previous" ]]; then
-            printf 'README headings are missing or out of order at: %s\n' "$heading" >&2
+require_exact_h2_sequence() {
+    local -a expected=(
+        '## Language'
+        '## Overview'
+        '## Security warning'
+        '## Installation'
+        '## Compose Quickstart'
+        '## Architecture'
+        '## Core concepts'
+        '## Base types'
+        '## Cards'
+        '## Deck configuration'
+        '## CLI reference'
+        '## Development'
+        '## Limitations and evaluation'
+        '## License'
+    )
+    local -a actual=()
+    mapfile -t actual < <(grep -E '^## ' "$readme")
+
+    if [[ ${#actual[@]} -ne ${#expected[@]} ]]; then
+        printf 'README H2 count differs: expected %d, found %d\n' "${#expected[@]}" "${#actual[@]}" >&2
+        exit 1
+    fi
+
+    local index
+    for index in "${!expected[@]}"; do
+        if [[ "${actual[$index]}" != "${expected[$index]}" ]]; then
+            printf 'README H2 differs at position %d: expected %s, found %s\n' \
+                "$((index + 1))" "${expected[$index]}" "${actual[$index]}" >&2
             exit 1
         fi
-        previous=$line
     done
 }
 
@@ -57,21 +78,17 @@ require "$readme" 'Base + ATfEP'
 require "$readme" 'Base + Clang'
 require "$readme" 'Base + ATfEP + TIS'
 
-require_in_order \
-    '## Language' \
-    '## Overview' \
-    '## Security warning' \
-    '## Installation' \
-    '## Compose Quickstart' \
-    '## Architecture' \
-    '## Core concepts' \
-    '## Base types' \
-    '## Cards' \
-    '## Deck configuration' \
-    '## CLI reference' \
-    '## Development' \
-    '## Limitations and evaluation' \
-    '## License'
+require_exact_h2_sequence
+
+cli_reference=$(awk '
+    /^## CLI reference$/ { in_cli_reference = 1; next }
+    in_cli_reference && /^## / { exit }
+    in_cli_reference { print }
+' "$readme")
+if grep -Eiq 'dembly exec.*lock|lock.*dembly exec' <<<"$cli_reference"; then
+    printf 'CLI reference incorrectly claims that dembly exec validates deck.lock\n' >&2
+    exit 1
+fi
 
 reject "$readme" 'performance measurement'
 reject "$readme" '^#{1,6}[[:space:]]*(benchmark|evaluation procedure)'

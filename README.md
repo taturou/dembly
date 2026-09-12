@@ -78,7 +78,7 @@ The host only passes each Card's SquashFS file into the container. The privilege
 - **Card:** an immutable `rootfs.squashfs` with a `card.toml` manifest, mounted at the manifest's target inside the Runtime.
 - **Volume:** persistent host-directory storage under the Deck root, not a Docker named volume. Deck-private storage is `volumes/<name>`; Card-private storage is `volumes/<card>/<name>`; `shared = true` uses `volumes/<name>`.
 - **Bind:** a host path mounted into the Runtime. Sources support `${HOST_HOME}` and `${DECK_ROOT}`; targets support `${USER}` and `${HOME}`. `required` defaults to `true`; a missing optional source is warned about and skipped.
-- **Lock:** `deck.lock` records the Base identity and Compose file checksum when applicable, plus Card manifest and filesystem checksums. Runtime commands reject a missing or stale lock.
+- **Lock:** `deck.lock` records the Base identity and Compose file checksum when applicable, plus Card manifest and filesystem checksums. `up`, `run`, and `check` reject a missing or stale lock.
 
 ## Base types
 
@@ -98,7 +98,7 @@ dembly card build /opt/clang ./cards \
   --path-prepend bin --non-interactive
 ```
 
-Without `--non-interactive`, Dembly prompts for the Card name, version, and mount target, supplying a name and mount-target default where possible. The builder creates the SquashFS artifact and records its checksum in `card.toml`; `validate`, `lock`, and Runtime commands verify it.
+Without `--non-interactive`, Dembly prompts for the Card name, version, and mount target, supplying a name and mount-target default where possible. The builder creates the SquashFS artifact and records its checksum in `card.toml`; `validate` and `lock` verify it, and `up`, `run`, and `check` verify it again before use.
 
 ## Deck configuration
 
@@ -146,7 +146,7 @@ prepend = ["/workspace/bin"]
 dembly lock
 ```
 
-Run `lock` after changing the Base, selected Compose service, Compose file, or Card artifacts. It rewrites `deck.lock`; `up`, `run`, `exec`, and `check` reject a stale lock.
+Run `lock` after changing the Base, selected Compose service, Compose file, or Card artifacts. It rewrites `deck.lock`; `up`, `run`, and `check` reject a stale lock.
 
 ### Complete Compose Base template
 
@@ -190,7 +190,7 @@ All Deck arguments are optional paths to `deck.toml`; without one, the current d
 | `dembly up [deck.toml]` | Creates persistent Runtime state and starts the Image Runtime or Deck-root Compose project. | The lock is missing/stale, a Runtime already exists, Docker fails, or the Base has no startup command. |
 | `dembly down [deck.toml]` | Stops only a Dembly-owned Runtime; for Compose, tears down its Deck-root project and removes generated metadata. | Runtime metadata or ownership labels are absent/invalid, or Docker/Compose fails. |
 | `dembly run [deck.toml] -- <command...>` | Runs one command in a temporary Runtime and removes temporary Runtime state afterward. | `-- <command...>` is absent, the lock is missing/stale, or Runtime startup fails. |
-| `dembly exec [deck.toml] -- <command...>` | Executes one command in the already-running Runtime. | `-- <command...>` is absent, no owned Runtime is running, or the lock is missing/stale. |
+| `dembly exec [deck.toml] -- <command...>` | Executes one command in the already-running Runtime. | `-- <command...>` is absent, no owned Runtime is running, Runtime metadata cannot be read, or command execution fails. |
 | `dembly inspect [deck.toml]` | Prints the resolved Deck plan. | The Deck cannot be resolved. |
 | `dembly check [deck.toml]` | Runs each configured Card check; Compose checks temporarily start and stop its project. | The lock is missing/stale, Runtime setup fails, or any Card check fails. |
 | `dembly card build <tool-root> <cards-root> [options]` | Builds a Card artifact under `<cards-root>`. Options: `--name`, `--version`, `--mount-target`, repeatable `--path-prepend`, and `--non-interactive`. | Required arguments or non-interactive metadata are missing, `mksquashfs` fails, or output cannot be written. |
