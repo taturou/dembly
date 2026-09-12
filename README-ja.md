@@ -109,8 +109,8 @@ Host は各 Card の SquashFS ファイルを container 内へ渡すだけです
 
 | Base | ライフサイクル | 使用する場面 |
 | --- | --- | --- |
-| Image | `up` は一つの `dembly-<deck-name>` Runtime container を作成して開始します。`exec` はその中へ入ります。`down` は所有権を検証して削除します。`run` は一つの command 用の一時 Runtime を作成し、後始末します。 | 一つの image が完全な service boundary である場合。 |
-| Compose | `up` は選択した service 用の生成済み override を書き込み、その後 Deck ルートの project に対して Compose を実行します。その project で宣言された他の service も開始します。`exec` は選択した service を対象にします。`down` は同じ Compose file と project を使って project を停止し、生成済み metadata を削除します。`run` はそのライフサイクルを通して選択した service command を実行します。 | Runtime が複数 service の Compose topology を保持する必要がある場合。 |
+| Image | `up` は一つの `dembly-<deck-name>` Runtime container を作成して開始し、`exec` はその中へ入り、`down` は所有権を検証して削除し、`run` は一つの command 用の一時 Runtime を作成して後始末します。 | 一つの image が完全な service boundary である場合 |
+| Compose | `up` は選択した service 用の生成済み override を書き込み、その後 Deck ルートの project に対して Compose を実行してその project で宣言された他の service も開始し、`exec` は選択した service を対象にし、`down` は同じ Compose file と project を使って project を停止して生成済み metadata を削除し、`run` はそのライフサイクルを通して選択した service command を実行します。 | Runtime が複数 service の Compose topology を保持する必要がある場合 |
 
 ## Card
 
@@ -216,17 +216,17 @@ required = true
 
 | Command | 効果 | 失敗条件 |
 | --- | --- | --- |
-| `dembly --version` | 接頭辞なしのインストール済み package version を表示します。 | executable を開始できない場合。 |
-| `dembly validate [deck.toml]` | Runtime を作成せずに Deck と Card filesystem を解決して検証します。 | Deck、path、宣言、Card checksum が不正な場合。 |
-| `dembly lock [deck.toml]` | 現在の image/Compose と Card identity を含む `deck.lock` を書き込みます。 | Docker が Base を inspect できない、Compose service が不正、または Card が不正な場合。 |
-| `dembly up [deck.toml]` | 永続的な Runtime state を作成し、Image Runtime または Deck ルートの Compose project を開始します。 | lock が存在しないか古い、Runtime がすでに存在する、Docker が失敗する、または Base に startup command がない場合。 |
-| `dembly down [deck.toml]` | Dembly 所有の Runtime だけを停止します。Compose では Deck ルートの project を teardown し、生成済み metadata を削除します。 | Runtime metadata または ownership label がないか不正、または Docker/Compose が失敗する場合。 |
-| `dembly run [deck.toml] -- <command...>` | 一時 Runtime 内で一つの command を実行し、その後に一時 Runtime state を削除します。 | `-- <command...>` がない、lock が存在しないか古い、または Runtime の開始が失敗する場合。 |
-| `dembly exec [deck.toml] -- <command...>` | すでに実行中の Runtime 内で一つの command を実行します。 | `-- <command...>` がない、所有する Runtime が実行されていない、Runtime metadata を読み取れない、または command 実行が失敗する場合。 |
-| `dembly inspect [deck.toml]` | 解決済みの Deck plan を表示します。 | Deck を解決できない場合。 |
-| `dembly check [deck.toml]` | 設定済みの各 Card check を実行します。Compose check はその project を一時的に開始して停止します。 | lock が存在しないか古い、Runtime setup が失敗する、またはいずれかの Card check が失敗する場合。 |
-| `dembly card build <tool-root> <cards-root> [options]` | `<cards-root>` 配下に Card artifact をビルドします。option は `--name`、`--version`、`--mount-target`、繰り返し指定できる `--path-prepend`、`--non-interactive` です。 | 必須引数または非対話 metadata がない、`mksquashfs` が失敗する、または output を書き込めない場合。 |
-| `dembly help` | 公開 command list を表示します。 | 通常の失敗条件はありません。 |
+| `dembly --version` | 接頭辞なしのインストール済み package version を表示します。 | executable を開始できない場合 |
+| `dembly validate [deck.toml]` | Runtime を作成せずに Deck と Card filesystem を解決して検証します。 | Deck、path、宣言、Card checksum が不正な場合 |
+| `dembly lock [deck.toml]` | 現在の image/Compose と Card identity を含む `deck.lock` を書き込みます。 | Docker が Base を inspect できない、Compose service が不正、または Card が不正な場合 |
+| `dembly up [deck.toml]` | 永続的な Runtime state を作成し、Image Runtime または Deck ルートの Compose project を開始します。 | lock が存在しないか古い、Runtime がすでに存在する、Docker が失敗する、または Base に startup command がない場合 |
+| `dembly down [deck.toml]` | Dembly 所有の Runtime だけを停止し、Compose では Deck ルートの project を teardown して生成済み metadata を削除します。 | Runtime metadata または ownership label がないか不正、または Docker/Compose が失敗する場合 |
+| `dembly run [deck.toml] -- <command...>` | 一時 Runtime 内で一つの command を実行し、その後に一時 Runtime state を削除します。 | `-- <command...>` がない、lock が存在しないか古い、または Runtime の開始が失敗する場合 |
+| `dembly exec [deck.toml] -- <command...>` | すでに実行中の Runtime 内で一つの command を実行します。 | `-- <command...>` がない、所有する Runtime が実行されていない、Runtime metadata を読み取れない、または command 実行が失敗する場合 |
+| `dembly inspect [deck.toml]` | 解決済みの Deck plan を表示します。 | Deck を解決できない場合 |
+| `dembly check [deck.toml]` | 設定済みの各 Card check を実行し、Compose check はその project を一時的に開始して停止します。 | lock が存在しないか古い、Runtime setup が失敗する、またはいずれかの Card check が失敗する場合 |
+| `dembly card build <tool-root> <cards-root> [options]` | `<cards-root>` 配下に Card artifact をビルドし、option は `--name`、`--version`、`--mount-target`、繰り返し指定できる `--path-prepend`、`--non-interactive` です。 | 必須引数または非対話 metadata がない、`mksquashfs` が失敗する、または output を書き込めない場合 |
+| `dembly help` | 公開 command list を表示します。 | 通常の失敗条件はありません |
 
 ## 開発
 

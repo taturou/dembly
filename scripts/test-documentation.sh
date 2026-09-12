@@ -60,9 +60,35 @@ require_exact_h2_sequence() {
     done
 }
 
+require_matching_artifact_layout_rows() {
+    if ! diff -u \
+        <(grep -E '^\| Base( \+| \|)' "$readme" | tail -n +2) \
+        <(grep -E '^\| Base( \+| \|)' "$japanese_readme" | tail -n +2); then
+        printf 'README artifact-layout rows differ between English and Japanese documentation\n' >&2
+        exit 1
+    fi
+}
+
+reject_multiple_japanese_sentences_per_line() {
+    if ! awk '
+        /^```/ { in_code = !in_code; next }
+        !in_code {
+            line = $0
+            if (gsub(/。/, "", line) > 1) {
+                print FNR ": " $0
+                found = 1
+            }
+        }
+        END { exit found }
+    ' "$japanese_readme"; then
+        printf 'README-ja.md contains multiple Japanese sentences on one line\n' >&2
+        exit 1
+    fi
+}
+
 require "$readme" 'https://github.com/taturou/dembly/releases/latest/download/dembly-install.sh'
 require "$readme" 'https://github.com/taturou/dembly/releases/download/v1.2.3/dembly-install.sh'
-require "$readme" 'README-ja.md'
+require "$readme" 'English | [日本語](README-ja.md)'
 require "$readme" '```mermaid'
 require "$readme" 'docker compose pull'
 require "$readme" 'dembly validate'
@@ -96,6 +122,8 @@ require "$japanese_readme" '| Base + Clang |'
 require "$japanese_readme" '| Base + ATfEP + TIS |'
 
 require_exact_h2_sequence
+require_matching_artifact_layout_rows
+reject_multiple_japanese_sentences_per_line
 
 cli_reference=$(awk '
     /^## CLI reference$/ { in_cli_reference = 1; next }
@@ -107,10 +135,13 @@ if grep -Eiq 'dembly exec.*lock|lock.*dembly exec' <<<"$cli_reference"; then
     exit 1
 fi
 
-reject "$readme" 'performance measurement'
-reject "$readme" '^#{1,6}[[:space:]]*(benchmark|evaluation procedure)'
+for public_readme in "$readme" "$japanese_readme"; do
+    reject "$public_readme" 'performance measurement'
+    reject "$public_readme" '^#{1,6}[[:space:]]*(benchmark|evaluation procedure)'
+    reject "$public_readme" '\bMIT\b'
+done
+
 reject "$readme" 'implementation in progress'
-reject "$readme" '\bMIT\b'
 reject "$compose_readme" 'implementation in progress'
 
 require "$compose_readme" 'docker compose pull'
