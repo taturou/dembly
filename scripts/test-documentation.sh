@@ -16,6 +16,15 @@ require() {
     fi
 }
 
+require_exact_line() {
+    local file=$1
+    local line=$2
+    if ! grep -Fxq -- "$line" "$file"; then
+        printf 'missing exact documentation line in %s: %s\n' "$file" "$line" >&2
+        exit 1
+    fi
+}
+
 reject() {
     local file=$1
     local pattern=$2
@@ -60,13 +69,42 @@ require_exact_h2_sequence() {
     done
 }
 
+artifact_layout_rows() {
+    local file=$1
+    local heading=$2
+
+    awk -v heading="$heading" '
+        $0 == heading { in_layout = 1; next }
+        in_layout && /^## / { exit }
+        in_layout && /^\| Base( \+| \|)/ { print }
+    ' "$file"
+}
+
 require_matching_artifact_layout_rows() {
-    if ! diff -u \
-        <(grep -E '^\| Base( \+| \|)' "$readme" | tail -n +2) \
-        <(grep -E '^\| Base( \+| \|)' "$japanese_readme" | tail -n +2); then
-        printf 'README artifact-layout rows differ between English and Japanese documentation\n' >&2
+    local -a expected=(
+        '| Base | `base-image` | `base-image` |'
+        '| Base + ATfEP | `base-image-with-atfep` | `base-image` + `cards/atfep/rootfs.squashfs` |'
+        '| Base + Clang | `base-image-with-clang` | `base-image` + `cards/clang/rootfs.squashfs` |'
+        '| Base + ATfEP + TIS | `base-image-with-atfep-and-tis` | `base-image` + `cards/atfep/rootfs.squashfs` + `cards/tis/rootfs.squashfs` |'
+    )
+    local -a english_rows japanese_rows
+    mapfile -t english_rows < <(artifact_layout_rows "$readme" '## Limitations and evaluation')
+    mapfile -t japanese_rows < <(artifact_layout_rows "$japanese_readme" '## 制限と評価')
+
+    if [[ ${#english_rows[@]} -ne ${#expected[@]} ]] || [[ ${#japanese_rows[@]} -ne ${#expected[@]} ]]; then
+        printf 'README artifact-layout row count must be %d in both languages\n' "${#expected[@]}" >&2
         exit 1
     fi
+
+    local index
+    for index in "${!expected[@]}"; do
+        if [[ "${english_rows[$index]}" != "${expected[$index]}" ]] || \
+            [[ "${japanese_rows[$index]}" != "${expected[$index]}" ]]; then
+            printf 'README artifact-layout row %d differs between English and Japanese documentation\n' \
+                "$((index + 1))" >&2
+            exit 1
+        fi
+    done
 }
 
 reject_multiple_japanese_sentences_per_line() {
@@ -106,6 +144,7 @@ require "$readme" 'Base + Clang'
 require "$readme" 'Base + ATfEP + TIS'
 
 require "$japanese_readme" 'English documentation: [README.md](README.md)'
+require_exact_line "$japanese_readme" '[English](README.md) | 日本語'
 require "$japanese_readme" 'https://github.com/taturou/dembly/releases/latest/download/dembly-install.sh'
 require "$japanese_readme" 'https://github.com/taturou/dembly/releases/download/v1.2.3/dembly-install.sh'
 require "$japanese_readme" 'docker compose pull'
@@ -136,8 +175,8 @@ if grep -Eiq 'dembly exec.*lock|lock.*dembly exec' <<<"$cli_reference"; then
 fi
 
 for public_readme in "$readme" "$japanese_readme"; do
-    reject "$public_readme" 'performance measurement'
-    reject "$public_readme" '^#{1,6}[[:space:]]*(benchmark|evaluation procedure)'
+    reject "$public_readme" 'performance measurement|benchmark'
+    reject "$public_readme" '性能測定|ベンチマーク|性能評価'
     reject "$public_readme" '\bMIT\b'
 done
 
