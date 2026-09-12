@@ -1,4 +1,15 @@
 #[test]
+fn global_version_is_bare_package_version() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_dembly"))
+        .arg("--version")
+        .output()
+        .expect("dembly should start");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "0.1.0\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn public_help_lists_validate_without_internal_runtime_namespace() {
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_dembly"))
         .arg("--help")

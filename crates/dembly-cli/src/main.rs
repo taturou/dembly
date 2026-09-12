@@ -34,6 +34,11 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     };
 
+    if argument == "--version" {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
+
     if argument == "--help" || argument == "-h" || argument == "help" {
         print!("{PUBLIC_COMMANDS}");
         return ExitCode::SUCCESS;
