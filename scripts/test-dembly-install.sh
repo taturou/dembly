@@ -82,6 +82,15 @@ if run_installer --uninstall 1.2.3; then
 fi
 test -x "$test_data/dembly/releases/1.2.3/dembly"
 
+# Break caught: --uninstall treats a relative active symlink to the release as inactive.
+ln -sfnT '../../../data/dembly/releases/1.2.3/dembly' "$test_home/.local/bin/dembly"
+if run_installer --uninstall 1.2.3; then
+  echo 'expected relative active-version uninstall to fail' >&2
+  exit 1
+fi
+test -x "$test_data/dembly/releases/1.2.3/dembly"
+ln -sfnT "$test_data/dembly/releases/1.2.3/dembly" "$test_home/.local/bin/dembly"
+
 # Break caught: --uninstall accepts a non-SemVer prerelease identifier.
 if run_installer --uninstall 1.2.3-01; then
   echo 'expected invalid SemVer uninstall to fail' >&2
@@ -110,5 +119,17 @@ test ! -e "$test_data/licenses/dembly/LICENSE"
 test ! -e "$test_home/.local/bin/dembly"
 test -f "$test_data/unrelated/file"
 test -f "$test_home/unrelated/file"
+
+# Break caught: --uninstall follows a symlinked releases parent outside XDG data.
+outside_releases="$test_root/outside-releases"
+mkdir -p "$outside_releases/1.2.3"
+printf 'keep\n' > "$outside_releases/1.2.3/sentinel"
+mkdir -p "$test_data/dembly"
+ln -s "$outside_releases" "$test_data/dembly/releases"
+if run_installer --uninstall 1.2.3; then
+  echo 'expected symlinked releases uninstall to fail' >&2
+  exit 1
+fi
+test -f "$outside_releases/1.2.3/sentinel"
 
 echo 'dembly installer tests passed'

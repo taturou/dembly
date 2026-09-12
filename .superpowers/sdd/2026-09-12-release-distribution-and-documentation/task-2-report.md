@@ -81,3 +81,43 @@ Result: all commands exited 0. The installer test verified:
   explicitly intended trust boundary for this task.
 - The test uses GNU/Linux utilities available on the supported Linux x86_64
   host; portability to non-GNU userlands is outside the stated target.
+
+## Review fix: resolved active links and release-parent symlinks
+
+### Findings fixed
+
+- `--uninstall` previously compared `readlink` text with an absolute target.
+  A relative active symlink to the same binary therefore bypassed the active
+  release refusal.
+- `--uninstall` previously followed a symlink at
+  `$XDG_DATA_HOME/dembly/releases` when deleting a version child path.
+
+### Changes
+
+- Active-link checks now compare canonical paths from `readlink -f`.
+- Before install, uninstall, or purge performs a destructive release action,
+  the installer rejects symlinks in the Dembly management path (`dembly`,
+  `releases`, and the relevant release path).
+- The isolated test now proves refusal for a relative active symlink and a
+  symlinked releases parent. The latter asserts that an outside sentinel file
+  remains intact.
+
+### Commands and results
+
+```bash
+bash scripts/test-dembly-install.sh
+```
+
+RED result before the fix: exit code 1 with
+`expected relative active-version uninstall to fail`.
+
+```bash
+bash -n scripts/dembly-install.sh.in
+bash -n scripts/test-dembly-install.sh
+bash scripts/test-dembly-install.sh
+git diff --check
+```
+
+GREEN result: all commands exited 0. The test output included both active
+version refusals and `refusing symlinked release path`, and completed with
+`dembly installer tests passed`.

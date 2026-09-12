@@ -35,6 +35,23 @@ ensure_active_link_is_replaceable() {
   fi
 }
 
+ensure_release_paths_are_not_symlinks() {
+  local target_release=$1
+  local managed_path
+  for managed_path in "$data_home/dembly" "$releases_directory" "$target_release"; do
+    [[ ! -L "$managed_path" ]] || die "refusing symlinked release path: $managed_path"
+  done
+}
+
+active_link_targets() {
+  local target_binary=$1
+  local resolved_active_link
+  local resolved_target_binary
+  resolved_active_link=$(readlink -f -- "$active_link") || return 1
+  resolved_target_binary=$(readlink -f -- "$target_binary") || return 1
+  [[ $resolved_active_link == "$resolved_target_binary" ]]
+}
+
 activate_release() {
   ensure_active_link_is_replaceable
   mkdir -p "$(dirname "$active_link")"
@@ -43,6 +60,7 @@ activate_release() {
 
 install_release() {
   ensure_active_link_is_replaceable
+  ensure_release_paths_are_not_symlinks "$release_root"
 
   if ! release_is_valid; then
     temporary_directory=$(mktemp -d)
@@ -95,7 +113,8 @@ uninstall_release() {
   version=$1
   is_semver "$version" || die "invalid SemVer: $version"
   target_release="$data_home/dembly/releases/$version"
-  if [[ -L "$active_link" && $(readlink "$active_link") == "$target_release/dembly" ]]; then
+  ensure_release_paths_are_not_symlinks "$target_release"
+  if active_link_targets "$target_release/dembly"; then
     die "refusing to uninstall active version: $version"
   fi
   rm -rf -- "$target_release"
@@ -103,6 +122,7 @@ uninstall_release() {
 
 purge() {
   ensure_active_link_is_replaceable
+  ensure_release_paths_are_not_symlinks "$release_root"
   rm -rf -- "$releases_directory"
   rm -f -- "$license_destination"
   rmdir "$(dirname "$license_destination")" 2>/dev/null || true
