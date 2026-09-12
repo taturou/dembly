@@ -3,6 +3,7 @@ set -euo pipefail
 
 repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 readme="$repository_root/README.md"
+japanese_readme="$repository_root/README-ja.md"
 compose_readme="$repository_root/examples/compose-base/README.md"
 image_readme="$repository_root/examples/image-base/README.md"
 
@@ -77,6 +78,22 @@ require "$readme" '<replace-me>'
 require "$readme" 'Base + ATfEP'
 require "$readme" 'Base + Clang'
 require "$readme" 'Base + ATfEP + TIS'
+
+require "$japanese_readme" 'English documentation: [README.md](README.md)'
+require "$japanese_readme" 'https://github.com/taturou/dembly/releases/latest/download/dembly-install.sh'
+require "$japanese_readme" 'https://github.com/taturou/dembly/releases/download/v1.2.3/dembly-install.sh'
+require "$japanese_readme" 'docker compose pull'
+require "$japanese_readme" 'dembly validate'
+require "$japanese_readme" 'dembly lock'
+require "$japanese_readme" 'dembly up'
+require "$japanese_readme" 'dembly exec -- /bin/echo compose-runtime'
+require "$japanese_readme" 'dembly down'
+require "$japanese_readme" 'dembly --version'
+require "$japanese_readme" '(LICENSE)'
+require "$japanese_readme" '| Base |'
+require "$japanese_readme" '| Base + ATfEP |'
+require "$japanese_readme" '| Base + Clang |'
+require "$japanese_readme" '| Base + ATfEP + TIS |'
 
 require_exact_h2_sequence
 
