@@ -4,8 +4,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 static TEMPORARY_DIRECTORY_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+static RELEASE_BINARY: OnceLock<PathBuf> = OnceLock::new();
 
 #[test]
 fn image_base_applies_test_card_manifest_without_host_squashfs_mount() {
@@ -14,16 +16,7 @@ fn image_base_applies_test_card_manifest_without_host_squashfs_mount() {
     let fixture = repository.join("tests/fixtures/hello-card/rootfs");
     let image_dockerfile = repository.join("tests/fixtures/image-base");
     let tag = format!("dembly-fixture-{}", std::process::id());
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
-
-    run(Command::new("cargo").current_dir(&repository).args([
-        "build",
-        "--release",
-        "--target",
-        "x86_64-unknown-linux-musl",
-        "-p",
-        "dembly-cli",
-    ]));
+    let binary = release_binary();
     run(Command::new("docker").args(["build", "-t", &tag, image_dockerfile.to_str().unwrap()]));
     run(Command::new(&binary).args([
         "card",
@@ -252,16 +245,7 @@ fn validate_rejects_duplicate_card_names_from_distinct_manifests() {
     let root = temporary_directory();
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let fixture = repository.join("tests/fixtures/hello-card/rootfs");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
-
-    run(Command::new("cargo").current_dir(&repository).args([
-        "build",
-        "--release",
-        "--target",
-        "x86_64-unknown-linux-musl",
-        "-p",
-        "dembly-cli",
-    ]));
+    let binary = release_binary();
     for (directory, target) in [
         ("one", "/opt/dembly/cards/one"),
         ("two", "/opt/dembly/cards/two"),
@@ -295,7 +279,7 @@ fn validate_rejects_duplicate_export_targets() {
     let root = temporary_directory();
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let fixture = repository.join("tests/fixtures/hello-card/rootfs");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+    let binary = release_binary();
 
     for (directory, name, target) in [
         ("one", "one", "/opt/dembly/cards/one"),
@@ -331,7 +315,7 @@ fn validate_rejects_exact_card_mount_target_collisions() {
     let root = temporary_directory();
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let fixture = repository.join("tests/fixtures/hello-card/rootfs");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+    let binary = release_binary();
 
     build_test_card(
         &binary,
@@ -366,17 +350,7 @@ fn validate_rejects_exact_card_mount_target_collisions() {
 #[test]
 fn validate_warns_and_skips_an_optional_missing_bind() {
     let root = temporary_directory();
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
-
-    run(Command::new("cargo").current_dir(&repository).args([
-        "build",
-        "--release",
-        "--target",
-        "x86_64-unknown-linux-musl",
-        "-p",
-        "dembly-cli",
-    ]));
+    let binary = release_binary();
     fs::write(
         root.join("deck.toml"),
         "schema_version = 1\nname = \"optional-bind\"\n[base]\nimage = \"alpine:3.21\"\n[[binds]]\nsource = \"missing\"\ntarget = \"/work/missing\"\nmode = \"ro\"\nrequired = false\n",
@@ -401,17 +375,7 @@ fn validate_warns_and_skips_an_optional_missing_bind() {
 #[test]
 fn validate_rejects_a_required_missing_bind() {
     let root = temporary_directory();
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
-
-    run(Command::new("cargo").current_dir(&repository).args([
-        "build",
-        "--release",
-        "--target",
-        "x86_64-unknown-linux-musl",
-        "-p",
-        "dembly-cli",
-    ]));
+    let binary = release_binary();
     fs::write(
         root.join("deck.toml"),
         "schema_version = 1\nname = \"required-bind\"\n[base]\nimage = \"alpine:3.21\"\n[[binds]]\nsource = \"missing\"\ntarget = \"/work/missing\"\nmode = \"ro\"\n",
@@ -431,18 +395,8 @@ fn validate_rejects_a_required_missing_bind() {
 #[test]
 fn inspect_expands_host_and_runtime_bind_variables() {
     let root = temporary_directory();
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+    let binary = release_binary();
     let host_home = std::env::var("HOME").unwrap();
-
-    run(Command::new("cargo").current_dir(&repository).args([
-        "build",
-        "--release",
-        "--target",
-        "x86_64-unknown-linux-musl",
-        "-p",
-        "dembly-cli",
-    ]));
     fs::write(
         root.join("deck.toml"),
         "schema_version = 1\nname = \"bind-variables\"\n[base]\nimage = \"alpine:3.21\"\n[[binds]]\nsource = \"${HOST_HOME}\"\ntarget = \"/work/${USER}\"\nmode = \"ro\"\n[[binds]]\nsource = \"${HOST_HOME}\"\ntarget = \"${HOME}/config\"\nmode = \"ro\"\n",
@@ -471,7 +425,7 @@ fn inspect_uses_private_card_and_shared_volume_layouts() {
     let root = temporary_directory();
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let fixture = repository.join("tests/fixtures/hello-card/rootfs");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+    let binary = release_binary();
 
     build_test_card(
         &binary,
@@ -534,8 +488,7 @@ fn validate_rejects_mixed_shared_volume_declarations() {
         "schema_version = 1\nname = \"mixed-volume\"\n[base]\nimage = \"alpine:3.21\"\n[[volumes]]\nname = \"cache\"\ntarget = \"/one\"\n[[volumes]]\nname = \"cache\"\ntarget = \"/two\"\nshared = true\n",
     )
     .unwrap();
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+    let binary = release_binary();
     let output = Command::new(&binary)
         .current_dir(&root)
         .arg("validate")
@@ -556,8 +509,7 @@ fn validate_rejects_a_symlinked_volume_path() {
         "schema_version = 1\nname = \"symlink-volume\"\n[base]\nimage = \"alpine:3.21\"\n[[volumes]]\nname = \"cache\"\ntarget = \"/cache\"\n",
     )
     .unwrap();
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+    let binary = release_binary();
     let output = Command::new(&binary)
         .current_dir(&root)
         .arg("validate")
@@ -572,24 +524,16 @@ fn validate_rejects_a_symlinked_volume_path() {
 fn image_base_executes_a_symlink_from_a_card_filesystem() {
     let root = temporary_directory();
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
     let image_dockerfile = repository.join("tests/fixtures/image-base");
     let tag = format!("dembly-symlink-fixture-{}", std::process::id());
     let tool_root = root.join("tool-root");
+    let binary = release_binary();
 
     fs::create_dir_all(tool_root.join("bin")).unwrap();
     let target = tool_root.join("bin/true-target");
     fs::write(&target, "#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::os::unix::fs::symlink("true-target", tool_root.join("bin/true-link")).unwrap();
-    run(Command::new("cargo").current_dir(&repository).args([
-        "build",
-        "--release",
-        "--target",
-        "x86_64-unknown-linux-musl",
-        "-p",
-        "dembly-cli",
-    ]));
     run(Command::new("docker").args(["build", "-t", &tag, image_dockerfile.to_str().unwrap()]));
     build_test_card(
         &binary,
@@ -620,11 +564,11 @@ fn image_base_executes_a_symlink_from_a_card_filesystem() {
 fn image_base_executes_a_mmap_backed_executable_from_a_card_filesystem() {
     let root = temporary_directory();
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
     let image_dockerfile = repository.join("tests/fixtures/image-base");
     let tag = format!("dembly-mmap-fixture-{}", std::process::id());
     let tool_root = root.join("tool-root");
     let source = root.join("mmap.rs");
+    let binary = release_binary();
 
     fs::create_dir_all(tool_root.join("bin")).unwrap();
     fs::write(
@@ -639,14 +583,6 @@ fn image_base_executes_a_mmap_backed_executable_from_a_card_filesystem() {
         source.to_str().unwrap(),
         "-o",
         tool_root.join("bin/mmap-card").to_str().unwrap(),
-    ]));
-    run(Command::new("cargo").current_dir(&repository).args([
-        "build",
-        "--release",
-        "--target",
-        "x86_64-unknown-linux-musl",
-        "-p",
-        "dembly-cli",
     ]));
     run(Command::new("docker").args(["build", "-t", &tag, image_dockerfile.to_str().unwrap()]));
     build_test_card(
@@ -685,18 +621,10 @@ fn image_base_preserves_non_root_runtime_user() {
     let root = temporary_directory();
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let image_dockerfile = repository.join("tests/fixtures/nonroot-base");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+    let binary = release_binary();
     let tag = format!("dembly-nonroot-fixture-{}", std::process::id());
     let deck_name = format!("nonroot-fixture-{}", std::process::id());
 
-    run(Command::new("cargo").current_dir(&repository).args([
-        "build",
-        "--release",
-        "--target",
-        "x86_64-unknown-linux-musl",
-        "-p",
-        "dembly-cli",
-    ]));
     run(Command::new("docker").args(["build", "-t", &tag, image_dockerfile.to_str().unwrap()]));
     fs::write(
         root.join("deck.toml"),
@@ -738,18 +666,9 @@ fn image_base_preserves_non_root_runtime_user() {
 #[test]
 fn compose_base_runs_a_temporary_command_and_cleans_up() {
     let root = temporary_directory();
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+    let binary = release_binary();
     let deck_name = format!("compose-fixture-{}", std::process::id());
 
-    run(Command::new("cargo").current_dir(&repository).args([
-        "build",
-        "--release",
-        "--target",
-        "x86_64-unknown-linux-musl",
-        "-p",
-        "dembly-cli",
-    ]));
     fs::write(
         root.join("compose.yaml"),
         "services:\n  dev:\n    image: alpine:3.21\n    command: [\"sleep\", \"infinity\"]\n    stop_grace_period: 1s\n  sidecar:\n    image: alpine:3.21\n    command: [\"sleep\", \"infinity\"]\n    stop_grace_period: 1s\n",
@@ -834,18 +753,9 @@ fn compose_base_runs_a_temporary_command_and_cleans_up() {
 #[test]
 fn card_build_interactive_creates_an_artifact_from_prompted_values() {
     let root = temporary_directory();
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let binary = repository.join("target/x86_64-unknown-linux-musl/release/dembly");
+    let binary = release_binary();
     let tool_root = root.join("interactive-tool");
 
-    run(Command::new("cargo").current_dir(&repository).args([
-        "build",
-        "--release",
-        "--target",
-        "x86_64-unknown-linux-musl",
-        "-p",
-        "dembly-cli",
-    ]));
     fs::create_dir_all(tool_root.join("bin")).unwrap();
     fs::write(tool_root.join("bin/tool"), b"#!/bin/sh\nexit 0\n").unwrap();
     let mut child = Command::new(&binary)
@@ -888,6 +798,23 @@ fn temporary_directory() -> PathBuf {
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn release_binary() -> PathBuf {
+    RELEASE_BINARY
+        .get_or_init(|| {
+            let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+            run(Command::new("cargo").current_dir(&repository).args([
+                "build",
+                "--release",
+                "--target",
+                "x86_64-unknown-linux-musl",
+                "-p",
+                "dembly-cli",
+            ]));
+            repository.join("target/x86_64-unknown-linux-musl/release/dembly")
+        })
+        .clone()
 }
 
 fn build_test_card(
