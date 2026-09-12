@@ -20,6 +20,8 @@ fail() {
 fixture="$temporary_directory/fixture"
 remote="$temporary_directory/origin.git"
 fake_bin="$temporary_directory/bin"
+git_log="$temporary_directory/git.log"
+gh_log="$temporary_directory/gh.log"
 mkdir -p "$fixture/scripts" "$fake_bin"
 git init --bare --initial-branch=main "$remote" >/dev/null
 git init --initial-branch=main "$fixture" >/dev/null
@@ -50,6 +52,12 @@ git -C "$fixture" add .
 git -C "$fixture" commit -m 'test fixture' >/dev/null
 git -C "$fixture" push -u origin main >/dev/null
 
+real_git=$(command -v git)
+cat >"$fake_bin/git" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"$RELEASE_TEST_GIT_LOG"
+exec "$RELEASE_TEST_REAL_GIT" "$@"
+EOF
 cat >"$fake_bin/mise" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -87,18 +95,19 @@ EOF
 cat >"$fake_bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >>"$RELEASE_TEST_GH_LOG"
 case "$*" in
   'auth status') exit 0 ;;
   'release view '*) exit 1 ;;
   *) echo "unexpected gh invocation: $*" >&2; exit 64 ;;
 esac
 EOF
-chmod +x "$fake_bin/mise" "$fake_bin/gh"
+chmod +x "$fake_bin/git" "$fake_bin/mise" "$fake_bin/gh"
 
 run_release() {
   (
     cd "$fixture"
-    PATH="$fake_bin:$PATH" bash scripts/release.sh "$@"
+    PATH="$fake_bin:$PATH" RELEASE_TEST_REAL_GIT="$real_git" RELEASE_TEST_GIT_LOG="$git_log" RELEASE_TEST_GH_LOG="$gh_log" bash scripts/release.sh "$@"
   )
 }
 
@@ -112,23 +121,59 @@ archive="$fixture/dist/dembly-v1.2.3-$target.tar.gz"
 checksum="$archive.sha256"
 build_info="$fixture/dist/dembly-v1.2.3-$target.build-info"
 touch "$archive" "$checksum" "$build_info" "$fixture/dist/dembly-v1.2.30-$target.tar.gz"
-run_release --clean 1.2.3
+cwd_dist="$temporary_directory/dist"
+mkdir -p "$cwd_dist"
+touch "$cwd_dist/dembly-v1.2.3-$target.tar.gz"
+(
+  cd "$temporary_directory"
+  PATH="$fake_bin:$PATH" RELEASE_TEST_REAL_GIT="$real_git" RELEASE_TEST_GIT_LOG="$git_log" RELEASE_TEST_GH_LOG="$gh_log" bash "$fixture/scripts/release.sh" --clean 1.2.3
+)
 [[ ! -e "$archive" && ! -e "$checksum" && ! -e "$build_info" ]] || fail 'clean retained a target artifact'
 [[ -e "$fixture/dist/dembly-v1.2.30-$target.tar.gz" ]] || fail 'clean removed a non-target artifact'
+[[ -e "$cwd_dist/dembly-v1.2.3-$target.tar.gz" ]] || fail 'clean removed a cwd-relative artifact'
 
 original_manifest=$(<"$fixture/Cargo.toml")
+: >"$git_log"
+: >"$gh_log"
 run_release --dry-run 1.2.3
 [[ $(<"$fixture/Cargo.toml") == "$original_manifest" ]] || fail 'dry-run changed caller Cargo.toml'
 [[ ! -e "$fixture/.git/refs/tags/v1.2.3" ]] || fail 'dry-run created a tag'
+! grep -Eq '^(ls-remote|push|.* tag )' "$git_log" || fail 'dry-run inspected or published a remote tag'
+[[ ! -s "$gh_log" ]] || fail 'dry-run called GitHub CLI'
 
-head_sha=$(git -C "$fixture" rev-parse HEAD)
 mkdir -p "$fixture/dist"
-printf 'version=1.2.3\ntarget=%s\ncommit=%s\nsha256=not-the-archive\n' "$target" "$head_sha" >"$build_info"
-if (
-  cd "$fixture"
-  PATH="$fake_bin:$PATH" RELEASE_DRY_WORKTREE=1 bash scripts/release.sh 1.2.3
-); then
+printf 'version=1.2.3\ntarget=%s\ncommit=wrong\nsha256=not-the-archive\n' "$target" >"$build_info"
+git -C "$fixture" add dist
+git -C "$fixture" commit -m 'add mismatched artifact' >/dev/null
+git -C "$fixture" push >/dev/null
+if run_release --dry-run 1.2.3; then
   fail 'mismatching build-info was overwritten'
 fi
+
+printf '# dirty\n' >>"$fixture/Cargo.toml"
+if run_release; then
+  fail 'normal release accepted a dirty checkout'
+fi
+git -C "$fixture" checkout -- Cargo.toml
+
+git -C "$fixture" checkout -b review-non-main >/dev/null
+if run_release; then
+  fail 'normal release accepted a non-main branch'
+fi
+git -C "$fixture" checkout main >/dev/null
+
+git -C "$fixture" commit --allow-empty -m 'ahead of origin' >/dev/null
+if run_release; then
+  fail 'normal release accepted a HEAD that differs from origin/main'
+fi
+
+if bypass_output=$( (
+  cd "$fixture"
+  PATH="$fake_bin:$PATH" RELEASE_DRY_WORKTREE=1 RELEASE_TEST_REAL_GIT="$real_git" RELEASE_TEST_GIT_LOG="$git_log" RELEASE_TEST_GH_LOG="$gh_log" bash scripts/release.sh
+) 2>&1 ); then
+  fail 'external dry-run environment variable bypassed normal preflight'
+fi
+[[ $bypass_output == *'normal release requires HEAD to equal origin/main'* ]] || fail 'external dry-run environment variable did not reach normal preflight'
+git -C "$fixture" reset --hard origin/main >/dev/null
 
 echo 'test-release: PASS'

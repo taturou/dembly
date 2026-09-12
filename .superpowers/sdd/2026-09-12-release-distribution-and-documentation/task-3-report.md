@@ -87,3 +87,35 @@ clippy、test、release build には `--locked` を指定する。
 
 - 通常公開モードは意図的に実行していない。現在の `main` は `origin/main` より先行しており、さらに実 tag/push/Release を行わないという Task 3 の制約に従うためである。
 - GitHub API の実レスポンスは偽装 `gh` で境界を検証した。認証済み実アカウントによる公開操作の事前確認は、実際のリリース担当時に通常モードの preflight で行う。
+
+## レビュー指摘の修正（2026-09-12）
+
+### 修正内容
+
+- `--clean` の削除先を cwd 相対 `dist/` から `$project_root/dist/` の三つの完全一致 artifact path に変更した。
+- 外部から設定できる `RELEASE_DRY_WORKTREE` による内部 dry-run 分岐を削除した。
+  `--dry-run` は同一 Bash process が作成した `mktemp -d` 配下の detached worktree で、`execute_release <worktree> 1 <version>` を直接呼び出す。
+  内部モードを表す CLI 引数・環境変数は存在しない。
+- GitHub Release の引数を `build_release_create_arguments` に集約した。
+  実行と失敗時の rerun guidance は同じ title、固定 notes、assets、prerelease 条件を共有する。
+  guidance は Bash の `%q` で quoting する。
+- workspace version rewrite の `awk` または置換失敗時に temporary replacement file を削除するようにした。
+
+### 追加した試験
+
+`scripts/test-release.sh` は次を追加で検証する。
+
+- fixture 以外の cwd にある同名 `dist` artifact を `--clean` が残す。
+- dry-run が `git ls-remote`、`git push`、tag 作成、GitHub CLI を実行しない。
+- normal mode が dirty checkout、`main` 以外の branch、`HEAD != origin/main` を拒否する。
+- 旧 `RELEASE_DRY_WORKTREE=1` を外部設定しても `HEAD != origin/main` の normal preflight を回避できない。
+
+### 修正後の検証
+
+```console
+$ bash -n scripts/release.sh
+$ shellcheck scripts/release.sh scripts/test-release.sh
+$ bash scripts/test-release.sh
+test-release: PASS
+$ git diff --check
+```

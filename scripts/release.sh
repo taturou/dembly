@@ -37,7 +37,7 @@ workspace_version() {
 
 set_workspace_version() {
   local selected_version=$1
-  local replacement_file
+  local replacement_file=''
   replacement_file=$(mktemp)
   awk -v version="$selected_version" '
     /^\[workspace\.package\]$/ { in_workspace_package = 1 }
@@ -49,8 +49,14 @@ set_workspace_version() {
     }
     { print }
     END { if (!changed) exit 1 }
-  ' Cargo.toml >"$replacement_file" || die 'root Cargo.toml lacks [workspace.package].version'
-  mv "$replacement_file" Cargo.toml
+  ' Cargo.toml >"$replacement_file" || {
+    rm -f -- "$replacement_file"
+    die 'root Cargo.toml lacks [workspace.package].version'
+  }
+  mv "$replacement_file" Cargo.toml || {
+    rm -f -- "$replacement_file"
+    die 'failed to replace root Cargo.toml'
+  }
 }
 
 require_command() {
@@ -100,7 +106,8 @@ run_quality_gates() {
 }
 
 artifact_paths() {
-  dist_directory="$project_root/dist"
+  local artifact_root=$1
+  dist_directory="$artifact_root/dist"
   artifact_basename="dembly-v${version}-${target}"
   archive="$dist_directory/$artifact_basename.tar.gz"
   checksum="$archive.sha256"
@@ -118,7 +125,8 @@ artifact_matches_current_commit() {
 }
 
 package_artifacts() {
-  artifact_paths
+  local artifact_root=$1
+  artifact_paths "$artifact_root"
   if [[ -e $archive || -e $checksum || -e $build_info ]]; then
     artifact_matches_current_commit || die "existing artifacts do not match current commit; run: scripts/release.sh --clean $version"
     sed -e "s/@VERSION@/$version/g" -e "s|@REPOSITORY@|$repository|g" scripts/dembly-install.sh.in >"$installer"
@@ -150,7 +158,7 @@ package_artifacts() {
 clean_artifacts() {
   local clean_version=$1
   local clean_basename="dembly-v${clean_version}-${target}"
-  rm -f -- "dist/${clean_basename}.tar.gz" "dist/${clean_basename}.tar.gz.sha256" "dist/${clean_basename}.build-info"
+  rm -f -- "$project_root/dist/${clean_basename}.tar.gz" "$project_root/dist/${clean_basename}.tar.gz.sha256" "$project_root/dist/${clean_basename}.build-info"
 }
 
 cleanup() {
@@ -163,13 +171,9 @@ run_in_dry_worktree() {
   temporary_directory=$(mktemp -d)
   local dry_worktree="$temporary_directory/worktree"
   git worktree add --detach "$dry_worktree" HEAD >/dev/null
-  # Keep an uncommitted invocation executable while all project inputs remain
-  # isolated in the detached worktree.
-  cp "$project_root/scripts/release.sh" "$dry_worktree/scripts/release.sh"
-  chmod +x "$dry_worktree/scripts/release.sh"
   (
     cd "$dry_worktree"
-    RELEASE_DRY_WORKTREE=1 bash scripts/release.sh ${dry_version:+"$dry_version"}
+    execute_release "$dry_worktree" 1 "$dry_version"
   )
   git worktree remove --force "$dry_worktree"
   temporary_directory=''
@@ -193,13 +197,61 @@ publish_release() {
   ensure_publication_is_unused
   git -c tag.gpgSign=false tag -a "$tag" -m "Dembly $tag"
   git push origin "$tag"
-  local prerelease_option=()
-  [[ $version == *-* ]] && prerelease_option=(--prerelease)
-  if ! gh release create "$tag" "$archive" "$checksum" "$installer" --title "Dembly $tag" --notes 'Dembly for Linux x86_64. Install this exact version with the version-pinned installer. See LICENSE for distribution terms.' "${prerelease_option[@]}"; then
+  build_release_create_arguments "$tag"
+  if ! gh "${release_create_arguments[@]}"; then
     echo "release: tag $tag was pushed but GitHub Release creation failed; the tag was preserved." >&2
-    echo "release: after resolving the failure, rerun: gh release create $tag $archive $checksum $installer --title \"Dembly $tag\"" >&2
+    echo "release: after resolving the failure, rerun: $(release_create_command)" >&2
     exit 1
   fi
+}
+
+build_release_create_arguments() {
+  local tag=$1
+  release_create_arguments=(release create "$tag" "$archive" "$checksum" "$installer" --title "Dembly $tag" --notes 'Dembly for Linux x86_64. Install this exact version with the version-pinned installer. See LICENSE for distribution terms.')
+  [[ $version == *-* ]] && release_create_arguments+=(--prerelease)
+}
+
+release_create_command() {
+  printf 'gh'
+  printf ' %q' "${release_create_arguments[@]}"
+  printf '\n'
+}
+
+execute_release() {
+  local execution_root=$1
+  local is_internal_dry_run=$2
+  local selected_version_argument=$3
+  cd "$execution_root"
+  require_tools
+  if [[ $is_internal_dry_run != 1 ]]; then
+    ensure_normal_preflight
+  fi
+
+  current_version=$(workspace_version)
+  is_semver "$current_version" || die "root Cargo.toml contains invalid SemVer: $current_version"
+  version=${selected_version_argument:-$current_version}
+  is_semver "$version" || die "invalid SemVer: $version"
+  version_changed=0
+  if [[ -n $selected_version_argument && $version != "$current_version" ]]; then
+    if [[ $is_internal_dry_run != 1 ]]; then
+      ensure_publication_is_unused
+    fi
+    set_workspace_version "$version"
+    mise exec -- cargo generate-lockfile
+    ensure_only_version_files_changed
+    version_changed=1
+  fi
+
+  verify_mise_environment
+  run_quality_gates
+  if [[ $is_internal_dry_run != 1 && $version_changed == 1 ]]; then
+    commit_version_change
+  fi
+  commit_sha=$(git rev-parse HEAD)
+  package_artifacts "$execution_root"
+
+  [[ $is_internal_dry_run == 1 ]] && return
+  publish_release
 }
 
 mode=normal
@@ -229,42 +281,10 @@ if [[ $mode == clean ]]; then
   exit 0
 fi
 
-if [[ $mode == dry-run && ${RELEASE_DRY_WORKTREE:-} != 1 ]]; then
+if [[ $mode == dry-run ]]; then
   [[ -z $version_argument ]] || is_semver "$version_argument" || die "invalid SemVer: $version_argument"
   run_in_dry_worktree "$version_argument"
   exit 0
 fi
 
-cd "$project_root"
-require_tools
-if [[ ${RELEASE_DRY_WORKTREE:-} != 1 ]]; then
-  ensure_normal_preflight
-fi
-
-current_version=$(workspace_version)
-is_semver "$current_version" || die "root Cargo.toml contains invalid SemVer: $current_version"
-version=${version_argument:-$current_version}
-is_semver "$version" || die "invalid SemVer: $version"
-version_changed=0
-if [[ -n $version_argument && $version != "$current_version" ]]; then
-  if [[ ${RELEASE_DRY_WORKTREE:-} != 1 ]]; then
-    ensure_publication_is_unused
-  fi
-  set_workspace_version "$version"
-  mise exec -- cargo generate-lockfile
-  ensure_only_version_files_changed
-  version_changed=1
-fi
-
-verify_mise_environment
-run_quality_gates
-if [[ ${RELEASE_DRY_WORKTREE:-} != 1 && $version_changed == 1 ]]; then
-  commit_version_change
-fi
-commit_sha=$(git rev-parse HEAD)
-package_artifacts
-
-if [[ ${RELEASE_DRY_WORKTREE:-} == 1 ]]; then
-  exit 0
-fi
-publish_release
+execute_release "$project_root" 0 "$version_argument"
