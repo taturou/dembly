@@ -175,7 +175,7 @@ if grep -Eiq 'dembly exec.*lock|lock.*dembly exec' <<<"$cli_reference"; then
 fi
 
 for public_readme in "$readme" "$japanese_readme"; do
-    reject "$public_readme" 'performance measurement|benchmark'
+    reject "$public_readme" 'performance evaluation|performance measurement|benchmark'
     reject "$public_readme" '性能測定|ベンチマーク|性能評価'
     reject "$public_readme" '\bMIT\b'
 done
