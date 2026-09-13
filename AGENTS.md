@@ -3,7 +3,7 @@
 - Treat `design/spec.md` as the implementation specification.
 - Create superpowers skill artifacts under `design/superpowers/{specs,plans}/`.
 - Write specs in Japanese. Plans may be in English.
-- Create grill-with-docs skill artifacts under `design/grillme/`.
+- Create grill-with-docs skill artifacts under `design/CONTEXT.md`.
 
 ## Commits
 
