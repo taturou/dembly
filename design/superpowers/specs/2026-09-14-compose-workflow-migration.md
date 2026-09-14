@@ -1,59 +1,245 @@
-# Compose workflow migration
+# Docker Compose運用への移行仕様
 
-## Purpose
+## 1. 文書の位置付け
 
-This document maps the previous Image/Compose orchestrator design to the Compose Base core design.
+この文書は、従来実装から[正本の仕様](../../spec.md)へ移行するための仕様差分を定義する。
 
-`design/spec.md` is the target implementation specification.
+現在の完成形は`design/spec.md`だけで定義し、この文書を実装後の動作仕様として参照しない。
 
-## Removed behavior
+具体的な実装手順、変更ファイル、テストの追加順序は`design/superpowers/plans/`に別途作成する。
 
-| Previous behavior | Target behavior | Reason |
+## 2. 移行の目的
+
+従来のDemblyは、Deckの解決に加えてコンテナの作成、起動、停止、削除、コマンド実行を担当している。
+
+移行後のHost Demblyは設定コンパイラに限定し、コンテナのライフサイクルをDocker Composeへ移す。
+
+Runtime Demblyは引き続きコンテナ内でCardをマウントし、環境を初期化してから利用者のプロセスを起動する。
+
+## 3. 維持する仕様
+
+- Cardは`card.toml`と`rootfs.squashfs`から構成する。
+- Cardのmanifest checksumとfilesystem checksumを検証する。
+- Card名、マウント先、export先、環境変数の競合を検出する。
+- SquashFSはRuntimeのマウント名前空間だけにマウントする。
+- Cardの選択変更では基礎イメージを再ビルドしない。
+- DeckおよびCardのVolumeとHost Bindを維持する。
+- 環境変数、`PATH`、export、post-mount hook、Card checkの意味を維持する。
+- Runtime初期化とpost-mount hookはrootで実行する。
+- 元のプロセスは解決済みの指定利用者で実行する。
+- HostとRuntimeでは同一の静的Dembly実行ファイルを使用する。
+
+## 4. 廃止する仕様
+
+| 従来仕様 | 移行後 | 理由 |
 |---|---|---|
-| Image Base | Out of scope | One lifecycle model is required. |
-| `dembly up/down/run/exec` | Native Docker Compose | Dembly compiles configuration and does not operate containers. |
-| Ephemeral generated override | One managed Compose file | Standard Compose tooling must observe the actual Runtime. |
-| `deck.toml` and `deck.lock` | `.dembly/config.toml` and `x-dembly.lock` | The Compose file carries the applied runtime state. |
-| Host executable bind by original path | Copy to `.dembly/runtime/bin/dembly` | Apply output remains runnable after a Host binary upgrade. |
+| Image Base | 対象外 | コンテナ起動方式をCompose Baseへ統一するため |
+| `dembly up` | `dembly apply`後の`docker compose up` | コンテナ操作をDocker Composeへ移すため |
+| `dembly down` | `docker compose down` | 同上 |
+| `dembly run` | `docker compose run` | 同上 |
+| `dembly exec` | `docker compose exec` | 同上 |
+| `dembly check`による一時コンテナ起動 | `docker compose run`によるRuntime check | Host Demblyからコンテナ操作を除くため |
+| Dembly生成の一時Compose override | 利用者の管理対象Composeファイルを直接更新 | 標準Composeコマンドから同じ定義を参照するため |
+| `deck.toml` | `.dembly/config.toml` | Dembly関連設定を`.dembly/`へ集約するため |
+| `deck.lock` | 管理対象Composeファイルの`x-dembly.lock` | Lockと適用状態をCompose定義と同じ正本へ保存するため |
+| Host実行ファイルの元パスをbind mount | `.dembly/runtime/bin/dembly`へコピー | Host側更新後も適用時のRuntimeを再現するため |
+| 実行時状態を一時ディレクトリへ保存 | `x-dembly.state`と`.dembly/runtime/` | 適用状態と再生成物を分離するため |
 
-## Preserved behavior
+`up`、`down`、`run`、`exec`は公開CLIから削除する。
 
-- Card layout, checksum verification, mount collision detection, environment merge, exports, hooks, Volume and Host Bind semantics remain requirements.
-- SquashFS is mounted only in the Runtime mount namespace.
-- Runtime initialization starts as root and executes the original process as the resolved intended user.
-- Card selection does not require a Base image rebuild.
+旧コマンドを互換用の別名として残さない。
 
-## New applied state
+## 5. 設定モデルの変更
 
-`dembly apply` updates only `compose.path`.
+### 5.1 Deck設定
 
-`x-dembly` stores the lock, the original values of managed fields, and the last values applied by Dembly.
+従来の`deck.toml`にあるCompose Base、Card、環境変数、Volume、Host Bindの定義を`.dembly/config.toml`へ移す。
 
-Apply and unapply reject a manually modified managed field.
+`[base]`の分岐は廃止し、`[compose]`を必須にする。
 
-`dembly unapply` restores the original values only after that check.
+```toml
+[compose]
+path = "../.devcontainer/compose.yaml"
+service = "dev"
+```
 
-## Command migration
-
-| Previous command | Target operation |
+| 従来 | 移行後 |
 |---|---|
-| `dembly up` | `dembly apply`; then `docker compose up -d` or Dev Containers rebuild |
-| `dembly down` | `docker compose down` |
-| `dembly run -- cmd` | `docker compose run <service> cmd` |
-| `dembly exec -- cmd` | `docker compose exec --user <intended-user> <service> cmd` |
-| `dembly lock` | Preserved; writes `x-dembly.lock` |
-| `dembly check` | Preserved; requires the lock |
+| カレントディレクトリの`deck.toml`または位置引数 | カレントディレクトリの`.dembly/config.toml`または`--config <path>` |
+| `deck.toml`の親をDeck rootとする | `config.toml`の親である`.dembly/`をDeck rootとする |
+| 親ディレクトリを探索しない | 維持する |
 
-## Dev Containers
+### 5.2 初期設定の生成
 
-Dev Containers is optional.
+新たに`dembly init`を追加する。
 
-When configured, `devcontainer.json` and `config.toml` must identify the same service.
+`init`はカレントディレクトリ以下の`card.toml`と`devcontainer.json`を探索し、採用候補を人間に選択させる。
 
-The Dembly-managed Compose file is the last `dockerComposeFile` entry.
+シンボリックリンクであるディレクトリ、`.git/`、`.dembly/`は探索しない。
 
-`overrideCommand` is false or absent.
+既存の`.dembly/config.toml`は上書きしない。
 
-`containerUser` is root or absent.
+`--config`を指定した場合は指定先へ設定を生成し、指定先の親をDeck rootとする。
 
-`remoteUser` equals the resolved intended user.
+### 5.3 Dev Containers
+
+`.dembly/config.toml`の任意フィールド`devcontainer.path`でDev Containers連携を有効にする。
+
+Demblyは`devcontainer.json`を書き換えず、対象サービス、Composeファイルの順序、`overrideCommand`、`containerUser`、`remoteUser`を検証する。
+
+## 6. Lockと適用状態の変更
+
+### 6.1 Lock
+
+`dembly lock`は`deck.lock`を生成せず、管理対象Composeファイルの`x-dembly.lock`だけを更新する。
+
+LockからComposeファイル全体のhashを削除する。
+
+代わりに、管理対象Composeファイルの正規化済みパス、対象サービス、イメージID、Cardの識別情報とchecksumを保存する。
+
+Composeファイル全体のhashは、同じComposeファイル内へLockを保存すると自己参照になるため使用しない。
+
+### 6.2 適用状態
+
+管理フィールドごとの`original`と`applied`を`x-dembly.state`へ保存する。
+
+時系列履歴を持つ`state.toml`は作成しない。
+
+再適用と適用解除では、Composeファイルの現在値が`applied`と一致することを確認する。
+
+不一致の場合は競合として終了し、利用者の変更を上書きしない。
+
+### 6.3 `unapply`
+
+新たに`dembly unapply`を追加する。
+
+`unapply`は管理フィールドを`original`へ戻し、`x-dembly.state`と`.dembly/runtime/`を削除する。
+
+`x-dembly.lock`と`.dembly/volumes/`は保持する。
+
+利用者は`unapply`の前に`docker compose down`を実行し、`unapply`自体はコンテナを検出または停止しない。
+
+## 7. Compose適用方式の変更
+
+### 7.1 管理対象ファイル
+
+Host Demblyが更新できるComposeファイルを、`.dembly/config.toml`の`compose.path`で1つだけ指定する。
+
+Dev Containersが複数のComposeファイルを使う場合でも、他のファイルは更新しない。
+
+他の`dockerComposeFile`に`x-dembly`が存在する場合はエラーとする。
+
+管理対象Composeファイルを`dockerComposeFile`配列の最後に置く。
+
+### 7.2 管理フィールド
+
+従来の一時override生成を廃止し、対象サービスの`entrypoint`、`command`、`user`、`privileged`、Dembly label、RuntimeとCardとVolumeとHost Bindのmountを直接管理する。
+
+対象外サービスと管理対象外フィールドは保持する。
+
+### 7.3 Runtime成果物
+
+`apply`は`.dembly/runtime/<service>.toml`、`.dembly/runtime/bin/dembly`、`.dembly/volumes/`以下の必要なディレクトリを生成する。
+
+`apply`は`.dembly/runtime/`と`.dembly/volumes/`を`.gitignore`へ追加する。
+
+`.dembly/config.toml`、Composeファイル、`devcontainer.json`、Host初期化スクリプトはGit管理を維持する。
+
+## 8. Runtime起動方式の変更
+
+対象サービスの`entrypoint`を次の内部コマンドへ置き換える。
+
+```text
+/run/dembly/bin/dembly __runtime init /run/dembly/runtime/<service>.toml
+```
+
+対象サービスの`command`は空にする。
+
+Runtime DemblyはrootでCardをマウントし、Volume、Host Bind、export、hook、環境変数を設定する。
+
+元の`entrypoint`と`command`はRuntime計画と`x-dembly.state`へ保存する。
+
+初期化後は、Composeサービスの`user`、イメージのDockerfile `USER`、rootの順で解決した利用者へ権限を変更し、元のプロセスを実行する。
+
+`docker compose run`から追加された引数がある場合は、元のプロセスの代わりにその引数を実行する。
+
+## 9. コマンド移行
+
+| 従来の操作 | 移行後の操作 |
+|---|---|
+| `dembly validate [deck.toml]` | `dembly validate [--config <path>]` |
+| `dembly lock [deck.toml]` | `dembly lock [--config <path>]` |
+| `dembly inspect [deck.toml]` | `dembly inspect [--config <path>]` |
+| `dembly check [deck.toml]` | Host整合性は`dembly check`、Card checkは`docker compose run` |
+| `dembly up [deck.toml]` | `dembly apply`後に`docker compose up -d` |
+| `dembly down [deck.toml]` | `docker compose down` |
+| `dembly run [deck.toml] -- <command...>` | `docker compose run --rm <service> <command...>` |
+| `dembly exec [deck.toml] -- <command...>` | `docker compose exec --user <intended-user> <service> <command...>` |
+| 該当なし | `dembly init [--config <path>]` |
+| 該当なし | `dembly apply [--config <path>]` |
+| 該当なし | `dembly unapply [--config <path>]` |
+
+Card checkは次の形でRuntime Demblyへ委譲する。
+
+```bash
+docker compose run --rm <service> \
+  /run/dembly/bin/dembly __runtime check /run/dembly/runtime/<service>.toml
+```
+
+通常のRuntime初期化とmountはrootで行い、Card checkは初期化後に指定利用者で実行する。
+
+## 10. Dev Containers起動への対応
+
+Dev Containersの`initializeCommand`には、利用者管理のHost初期化スクリプトを指定する。
+
+Host初期化スクリプトから`dembly validate`、必要な場合の`dembly lock`、`dembly apply`を順番に実行する。
+
+Demblyは`initializeCommand`へコマンド列を自動合成しない。
+
+`containerUser`はrootまたは未指定とし、Runtime Demblyをrootで開始する。
+
+`remoteUser`はRuntimeの指定利用者と一致させる。
+
+AIがDocker Composeを直接使用する場合も、Dev Containersの`dockerComposeFile`と同じファイル列、同じトップレベル`name`、同じ対象サービスを使用する。
+
+## 11. 実装領域への影響
+
+| 実装領域 | 主な変更 |
+|---|---|
+| CLI解析 | `init`、`apply`、`unapply`を追加し、`up`、`down`、`run`、`exec`を削除する |
+| 設定モデル | `DeckDocument`を`.dembly/config.toml`のCompose専用モデルへ移行する |
+| Lock | `deck.lock`の読み書きを`x-dembly.lock`のYAML読み書きへ置換する |
+| Compose処理 | 一時override生成とライフサイクル操作を、管理対象ファイルの競合検出付き編集へ置換する |
+| Runtime計画 | 一時ディレクトリではなく`.dembly/runtime/<service>.toml`へ決定的に生成する |
+| Runtime実行ファイル | Hostパスのbind mountを、適用時コピーのbind mountへ置換する |
+| Runtime起動 | 保存した元のプロセスと`docker compose run`の追加引数を選択できるようにする |
+| Card check | Host CLIによるコンテナ起動を削除し、Runtime内部コマンドとして実行する |
+| Dev Containers | `devcontainer.json`の読み取りと整合性検証を追加する |
+| テスト | HostがDockerを操作しないこと、Compose標準コマンドとの連携、競合、冪等性、復元を追加する |
+| 例とREADME | `deck.toml`とDemblyライフサイクルコマンドを、新設定とDocker Compose操作へ置換する |
+
+## 12. 移行時の削除対象
+
+- Image Baseの設定、解決、Lock、Runtime操作
+- `deck.toml`と`deck.lock`
+- `dembly up`、`down`、`run`、`exec`
+- DemblyからのDockerコンテナ操作
+- DemblyからのDocker Composeライフサイクル操作
+- 一時Compose override
+- 一時runtime stateディレクトリ
+- 旧Composeプロジェクト名の暗黙生成
+- 旧仕様だけを検証するテストとトレーサビリティ項目
+
+## 13. 移行完了条件
+
+- `design/spec.md`の全公開Hostコマンドがコンテナを操作しない。
+- 旧公開コマンド`up`、`down`、`run`、`exec`がCLIとヘルプから消えている。
+- `deck.toml`と`deck.lock`を必要とするコードパスが残っていない。
+- 管理対象ComposeファイルだけがDemblyから更新される。
+- `docker compose ps`がDembly適用済みコンテナを同じComposeプロジェクトとして表示する。
+- Docker Composeの`up`、`logs`、`exec`、`run`、`down`がDembly Runtimeと併用できる。
+- Dev ContainersとDocker Composeの直接実行が同じ対象サービスとRuntime設定を使用する。
+- Runtime Demblyがrootで初期化し、元のプロセスを指定利用者で実行する。
+- Card変更が基礎イメージの再ビルドなしで反映される。
+- `apply`と`unapply`が競合を検出し、同じ入力への再実行が冪等である。
+- 正本、移行仕様、実装計画、README、例、テストの用語とコマンドが一致する。
