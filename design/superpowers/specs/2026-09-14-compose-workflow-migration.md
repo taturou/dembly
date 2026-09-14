@@ -73,9 +73,15 @@ service = "dev"
 
 新たに`dembly init`を追加する。
 
-`init`はカレントディレクトリ以下の`card.toml`と`devcontainer.json`を探索し、採用候補を人間に選択させる。
+`init`はカレントディレクトリを基準に、`.dembly/cards/*/card.toml`、`.dembly-cards/*/card.toml`、`.cards/*/card.toml`、`cards/*/card.toml`だけをCard候補として探索する。
 
-シンボリックリンクであるディレクトリ、`.git/`、`.dembly/`は探索しない。
+Dev Containers設定は、`.devcontainer.json`、`.devcontainer/devcontainer.json`、`.devcontainer/*/devcontainer.json`だけを候補として探索する。
+
+各探索ルートの規定より深い階層は探索せず、シンボリックリンクであるディレクトリと候補ファイルは除外する。
+
+候補は正規化した相対パスの辞書順で表示し、1件の場合も人間に採用を確認させる。
+
+同じCard名の候補はパスで区別し、選択後のCard名が重複する場合はエラーとする。
 
 既存の`.dembly/config.toml`は上書きしない。
 
@@ -218,7 +224,7 @@ AIがDocker Composeを直接使用する場合も、Dev Containersの`dockerComp
 
 | 実装領域 | 主な変更 |
 |---|---|
-| CLI解析 | `init`、`apply`、`unapply`を追加し、`up`、`down`、`run`、`exec`を削除する |
+| CLI解析 | `init`に固定ルートの探索を追加し、`apply`と`unapply`を追加して、`up`、`down`、`run`、`exec`を削除する |
 | 設定モデル | `DeckDocument`を`.dembly/config.toml`のCompose専用モデルへ移行する |
 | Lock | `deck.lock`の読み書きを`x-dembly.lock`のYAML読み書きへ置換する |
 | Compose処理 | 一時override生成とライフサイクル操作を、管理対象ファイルの競合検出付き編集へ置換する |
@@ -247,6 +253,7 @@ AIがDocker Composeを直接使用する場合も、Dev Containersの`dockerComp
 - `design/spec.md`の全公開Hostコマンドがコンテナを操作しない。
 - 旧公開コマンド`up`、`down`、`run`、`exec`がCLIとヘルプから消えている。
 - `deck.toml`と`deck.lock`を必要とするコードパスが残っていない。
+- `init`が規定したCardとDev Containersの位置だけを決定的な順序で探索する。
 - 管理対象ComposeファイルだけがDemblyから更新される。
 - `docker compose ps`がDembly適用済みコンテナを同じComposeプロジェクトとして表示する。
 - Docker Composeの`up`、`logs`、`exec`、`run`、`down`がDembly Runtimeと併用できる。

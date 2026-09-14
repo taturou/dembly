@@ -86,6 +86,10 @@ Deckの正本は`.dembly/config.toml`である。
 
 Deck rootからの相対パスは、Cardをプロジェクト内で開発するときに使用する。
 
+プロジェクト内で`dembly init`が自動検出するCardの探索ルートは、`.dembly/cards/`、`.dembly-cards/`、`.cards/`、`cards/`である。
+
+各探索ルートは`<card-name>/card.toml`と`<card-name>/rootfs.squashfs`の構造を持つ。
+
 ## 4. 基本アーキテクチャ
 
 Demblyは、同一の実行ファイルをHost側とコンテナ側で使用する。
@@ -203,7 +207,13 @@ Dev Containersは初期化スクリプトの完了後に、Dembly適用済みの
 
 ### 5.3 Cardを開発する場合
 
-CardをDeck内の相対パスに置き、`dembly card build`で`rootfs.squashfs`と`card.toml`を生成する。
+CardをDeck内の`.dembly/cards/`へ置く場合は、次のように生成する。
+
+```bash
+dembly card build <tool-root> .dembly/cards
+```
+
+`.dembly-cards/`、`.cards/`、`cards/`もプロジェクト内のCard探索ルートとして使用できる。
 
 Cardを変更した後は、`dembly lock`と`dembly apply`を再実行し、Composeからコンテナを再作成する。
 
@@ -281,9 +291,9 @@ path = "../.devcontainer/devcontainer.json"
 [[cards]]
 path = "/var/lib/dembly/cards/clang/card.toml"
 
-# プロジェクト内で開発しているCard
+# Deck内で開発しているCard
 [[cards]]
-path = "../cards/local-tool/card.toml"
+path = "cards/local-tool/card.toml"
 
 # Deck全体へ設定する環境変数
 [environment]
@@ -312,6 +322,8 @@ required = false
 `devcontainer.path`は任意であり、指定した場合だけDev Containers固有の検証を有効にする。
 
 Cardの`path`が相対パスの場合は、Deck rootを基準に解決する。
+
+`.dembly/cards/local-tool/card.toml`は、Deck root相対の`cards/local-tool/card.toml`として指定する。
 
 `${DECK_ROOT}`は、設定ファイルの親ディレクトリを正規化した絶対パスへ展開する。
 
@@ -561,7 +573,8 @@ dembly card build <tool-root> <cards-root> [options]
 #### 入力
 
 - 任意の`--config <path>`
-- カレントディレクトリ以下の`card.toml`と`devcontainer.json`
+- 規定されたCard探索ルート直下の`card.toml`
+- 規定されたDev Containers探索位置の`devcontainer.json`
 - Composeファイルとそのサービス定義
 - 候補を選択または確認するための標準入力
 
@@ -579,9 +592,36 @@ dembly card build <tool-root> <cards-root> [options]
 
 `--config`を指定した場合は指定先へ生成し、親ディレクトリがなければ作成する。
 
-カレントディレクトリ内の`card.toml`と`devcontainer.json`を再帰的に探索し、候補を人間に選択させる。
+Cardは、カレントディレクトリを基準に次のパターンだけを探索する。
 
-`.git/`、`.dembly/`、シンボリックリンクであるディレクトリは探索しない。
+```text
+.dembly/cards/*/card.toml
+.dembly-cards/*/card.toml
+.cards/*/card.toml
+cards/*/card.toml
+```
+
+各Card探索ルートの直下1階層だけを対象とし、それより深い階層は探索しない。
+
+Dev Containers設定は、カレントディレクトリを基準に次のパターンだけを探索する。
+
+```text
+.devcontainer.json
+.devcontainer/devcontainer.json
+.devcontainer/*/devcontainer.json
+```
+
+シンボリックリンクであるディレクトリはたどらず、シンボリックリンクである`card.toml`と`devcontainer.json`も候補から除外する。
+
+存在する通常ファイルだけを候補とし、正規化したカレントディレクトリ相対パスの辞書順で表示する。
+
+候補が1件の場合も自動採用せず、人間に採用を確認させる。
+
+同じCard名を持つ候補はパスを併記して区別し、選択後のCard名が重複する場合はエラーとする。
+
+選択したプロジェクト内Cardのパスは、生成する設定ファイルのDeck rootからの相対パスとして記録する。
+
+`/var/lib/dembly/cards/`などカレントディレクトリ外のCardは自動探索せず、対話入力または生成後の設定編集によって指定する。
 
 Dev Containersを選択した場合は、`devcontainer.json`の`service`とComposeファイルを表示し、人間に採用を確認させる。
 
@@ -591,7 +631,7 @@ Dev Containersを使用しない場合は、Composeファイルとサービス�
 
 #### エラー
 
-設定ファイルがすでに存在する場合、候補を解釈できない場合、選択されたサービスが存在しない場合、または出力を書き込めない場合は非ゼロで終了する。
+設定ファイルがすでに存在する場合、候補を解釈できない場合、選択後のCard名が重複する場合、選択されたサービスが存在しない場合、または出力を書き込めない場合は非ゼロで終了する。
 
 ### 9.3 `dembly validate`
 
@@ -1030,6 +1070,7 @@ Runtime計画のスキーマを解釈できないRuntime Demblyは、Cardをマ�
 ## 14. 受入条件
 
 - `init`が候補を人間に選択させ、`.dembly/config.toml`を生成できる。
+- `init`が4つのCard探索ルートと3つのDev Containers探索パターンだけを対象とし、規定より深い階層とシンボリックリンクを候補から除外する。
 - Host Demblyの公開コマンドがコンテナを作成、起動、停止、削除せず、コンテナ内でコマンドを実行しない。
 - `lock`だけが`x-dembly.lock`を更新する。
 - Lockが欠落または無効な場合、`apply`と`check`が失敗する。
