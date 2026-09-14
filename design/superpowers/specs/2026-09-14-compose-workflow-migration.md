@@ -157,9 +157,19 @@ Dev Containersが複数のComposeファイルを使う場合でも、他のフ�
 
 Runtime DemblyはrootでCardをマウントし、Volume、Host Bind、export、hook、環境変数を設定する。
 
+Host BindはComposeから`/run/dembly/binds/`へ一旦マウントし、Runtime Demblyが利用者解決後に`${HOME}`と`${USER}`を展開して最終マウント先へbind mountする。
+
 元の`entrypoint`と`command`はRuntime計画と`x-dembly.state`へ保存する。
 
-初期化後は、Composeサービスの`user`、イメージのDockerfile `USER`、rootの順で解決した利用者へ権限を変更し、元のプロセスを実行する。
+Host Demblyは、適用前のComposeサービスの`user`、イメージのDockerfile `USER`、`root`の順でDocker形式の利用者指定を選び、Runtime計画の`runtime_user.spec`へ保存する。
+
+従来のHost側ユーザープローブは削除し、Runtime Demblyがコンテナ内の`/etc/passwd`と`/etc/group`からUID、GID、ホームディレクトリを解決する。
+
+`user`、`uid`、`user:group`、`uid:gid`を受け付けるが、ユーザー部分に対応する`/etc/passwd`のエントリを必須とする。
+
+利用者またはグループを解決できない場合は、Cardをマウントせず、元のプロセスを起動しない。
+
+利用者を解決した後はrootで環境を初期化し、指定利用者へ権限を変更して元のプロセスを実行する。
 
 `docker compose run`から追加された引数がある場合は、元のプロセスの代わりにその引数を実行する。
 
@@ -198,7 +208,9 @@ Demblyは`initializeCommand`へコマンド列を自動合成しない。
 
 `containerUser`はrootまたは未指定とし、Runtime Demblyをrootで開始する。
 
-`remoteUser`はRuntimeの指定利用者と一致させる。
+`remoteUser`はRuntime計画へ保存する利用者指定のユーザー部分と一致させる。
+
+`updateRemoteUserUID`によるUIDとGIDの同期は許可し、Runtime Demblyは同期後のコンテナ内利用者情報を解決する。
 
 AIがDocker Composeを直接使用する場合も、Dev Containersの`dockerComposeFile`と同じファイル列、同じトップレベル`name`、同じ対象サービスを使用する。
 
@@ -210,9 +222,9 @@ AIがDocker Composeを直接使用する場合も、Dev Containersの`dockerComp
 | 設定モデル | `DeckDocument`を`.dembly/config.toml`のCompose専用モデルへ移行する |
 | Lock | `deck.lock`の読み書きを`x-dembly.lock`のYAML読み書きへ置換する |
 | Compose処理 | 一時override生成とライフサイクル操作を、管理対象ファイルの競合検出付き編集へ置換する |
-| Runtime計画 | 一時ディレクトリではなく`.dembly/runtime/<service>.toml`へ決定的に生成する |
+| Runtime計画 | 一時ディレクトリではなく`.dembly/runtime/<service>.toml`へ決定的に生成し、解決済みUIDなどの代わりに`runtime_user.spec`とHost Bindの最終マウント先を保存する |
 | Runtime実行ファイル | Hostパスのbind mountを、適用時コピーのbind mountへ置換する |
-| Runtime起動 | 保存した元のプロセスと`docker compose run`の追加引数を選択できるようにする |
+| Runtime起動 | コンテナ内で利用者を解決し、保存した元のプロセスと`docker compose run`の追加引数を選択できるようにする |
 | Card check | Host CLIによるコンテナ起動を削除し、Runtime内部コマンドとして実行する |
 | Dev Containers | `devcontainer.json`の読み取りと整合性検証を追加する |
 | テスト | HostがDockerを操作しないこと、Compose標準コマンドとの連携、競合、冪等性、復元を追加する |
@@ -240,6 +252,7 @@ AIがDocker Composeを直接使用する場合も、Dev Containersの`dockerComp
 - Docker Composeの`up`、`logs`、`exec`、`run`、`down`がDembly Runtimeと併用できる。
 - Dev ContainersとDocker Composeの直接実行が同じ対象サービスとRuntime設定を使用する。
 - Runtime Demblyがrootで初期化し、元のプロセスを指定利用者で実行する。
+- Runtime Demblyが任意のDocker形式の利用者指定をコンテナ内で解決し、解決失敗時にCardと元のプロセスを起動しない。
 - Card変更が基礎イメージの再ビルドなしで反映される。
 - `apply`と`unapply`が競合を検出し、同じ入力への再実行が冪等である。
 - 正本、移行仕様、実装計画、README、例、テストの用語とコマンドが一致する。

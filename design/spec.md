@@ -34,6 +34,33 @@ Cardを追加または更新するために、基礎イメージを再ビルド�
 
 Host側のマウント名前空間には、CardのSquashFSをマウントしない。
 
+### 2.3 Hostの動作要件
+
+DemblyのHost実行ファイルはLinux x86_64で動作する。
+
+各操作には次のHost環境が必要である。
+
+| 操作 | Host要件 |
+|---|---|
+| `init` | Docker CLIとDocker Compose v2プラグイン |
+| `validate`、`lock`、`apply`、`inspect` | Docker CLI、Docker Compose v2プラグイン、接続可能なDocker Engine、Docker Engineを利用できる権限、`sha256sum` |
+| `check` | `sha256sum` |
+| `unapply` | 追加コマンドなし |
+| `card build` | `mksquashfs`と`sha256sum` |
+| Docker ComposeまたはDev ContainersによるRuntime起動 | カーネルのSquashFS機能、loop device、privileged containerを起動できるDocker Engine |
+
+各コマンドには、参照する入力を読み取り、出力先を作成または更新するファイルシステム権限も必要である。
+
+### 2.4 対象コンテナの動作要件
+
+対象コンテナの基礎イメージには次の要件がある。
+
+- `mount`コマンドを実行できる。
+- 指定利用者を`/etc/passwd`から解決できる。
+- 指定グループを名前で指定する場合は`/etc/group`から解決できる。
+
+Runtime Dembly自体は静的リンクされた実行ファイルとして組み込む。
+
 ## 3. DeckとCard
 
 ### 3.1 Deck
@@ -241,37 +268,56 @@ Lock済み
 ```toml
 schema_version = 1
 
+# Demblyが更新するComposeファイルと対象サービス
 [compose]
 path = "../.devcontainer/compose.yaml"
 service = "dev"
 
+# 任意のDev Containers設定
 [devcontainer]
 path = "../.devcontainer/devcontainer.json"
 
+# 通常運用で使用する共有Card
 [[cards]]
 path = "/var/lib/dembly/cards/clang/card.toml"
 
+# プロジェクト内で開発しているCard
+[[cards]]
+path = "../cards/local-tool/card.toml"
+
+# Deck全体へ設定する環境変数
 [environment]
 MODE = "development"
 
+# PATHの先頭へ追加するディレクトリ
 [environment_path]
 prepend = ["/workspace/bin"]
 
+# Deckが管理する永続領域
 [[volumes]]
 name = "build"
 target = "/workspace/build"
 shared = false
 
+# 指定利用者のホームへ配置するHostファイル
 [[binds]]
-source = "${DECK_ROOT}/.."
-target = "/workspace"
-mode = "rw"
-required = true
+source = "${HOST_HOME}/.gitconfig"
+target = "${HOME}/.gitconfig"
+mode = "ro"
+required = false
 ```
 
 `schema_version`、`compose.path`、`compose.service`は必須である。
 
 `devcontainer.path`は任意であり、指定した場合だけDev Containers固有の検証を有効にする。
+
+Cardの`path`が相対パスの場合は、Deck rootを基準に解決する。
+
+`${DECK_ROOT}`は、設定ファイルの親ディレクトリを正規化した絶対パスへ展開する。
+
+プロジェクトソースのHost BindはComposeファイルで管理する。
+
+`.dembly/config.toml`の`[[binds]]`は、指定利用者のホームへ配置するHostファイルや、Demblyの任意Bind機能を必要とするファイルに使用する。
 
 未知のフィールドはエラーとする。
 
@@ -282,39 +328,48 @@ schema_version = 1
 name = "clang"
 version = "20.1.0"
 
+# CardのSquashFSと検証値
 [filesystem]
 type = "squashfs"
 file = "rootfs.squashfs"
 sha256 = "<sha256>"
 
+# SquashFSを展開するコンテナ内のパス
 [mount]
 target = "/opt/dembly/cards/clang"
 
+# Cardが追加する環境変数
 [environment]
 CLANG_RESOURCE = "example"
 
+# Cardのマウント先を基準にPATHへ追加するディレクトリ
 [environment_path]
 prepend = ["bin"]
 
+# Card内のファイルを共通パスへ公開する設定
 [[exports]]
 source = "bin/clang"
 target = "/usr/local/bin/clang"
 
+# Cardが使用する永続領域
 [[volumes]]
 name = "cache"
 target = "/var/cache/clang"
 shared = false
 
+# Cardが必要とするHostファイル
 [[binds]]
 source = "${HOST_HOME}/.config/clang"
 target = "${HOME}/.config/clang"
 mode = "ro"
 required = false
 
+# Cardのマウント後にrootで実行する処理
 [[hooks.post_mount]]
 exec = "setup/post-mount.sh"
 args = []
 
+# Cardが利用可能か確認する処理
 [check]
 exec = "bin/clang"
 args = ["--version"]
@@ -323,6 +378,20 @@ args = ["--version"]
 `filesystem.file`は`card.toml`の親ディレクトリを基準に解決する。
 
 `mount.target`、Volumeの`target`、Host Bindの`target`、exportの`target`は絶対パスとする。
+
+Host Bindの`source`では`${HOST_HOME}`と`${DECK_ROOT}`を使用できる。
+
+`${HOST_HOME}`は、Host Demblyを実行した利用者のホームディレクトリへ展開する。
+
+Host Bindの`target`では`${HOME}`と`${USER}`を使用できる。
+
+`${HOME}`と`${USER}`は、それぞれRuntimeの指定利用者のホームディレクトリとユーザー名へ展開する。
+
+Host DemblyはHost Bindの`source`を解決し、Composeでは`/run/dembly/binds/<index>`へ一旦マウントする。
+
+Runtime Demblyは指定利用者を解決した後、`target`の`${HOME}`と`${USER}`を展開し、一時マウント先から最終マウント先へbind mountする。
+
+定義された場所以外の変数と未知の変数はエラーとする。
 
 未知のフィールドはエラーとする。
 
@@ -335,7 +404,7 @@ args = ["--version"]
 - 管理対象Composeファイルは`dockerComposeFile`配列の最後にある。
 - `overrideCommand`は`false`または未指定である。
 - `containerUser`は`root`または未指定である。
-- `remoteUser`は必須であり、指定利用者と一致する。
+- `remoteUser`は必須であり、Runtime計画へ保存する利用者指定のユーザー部分と一致する。
 
 `dockerComposeFile`内の相対パスは、`devcontainer.json`の親ディレクトリを基準に解決する。
 
@@ -345,7 +414,9 @@ Demblyは`devcontainer.json`を書き換えない。
 
 ### 7.5 管理対象Composeファイル
 
-`compose.path`で指定したファイルだけをDemblyの管理対象とする。
+`.dembly/config.toml`の`compose.path`で指定したComposeファイルを、管理対象Composeファイルと呼ぶ。
+
+Demblyはこのファイルだけを更新する。
 
 管理対象Composeファイルには、トップレベルの`name`が必要である。
 
@@ -353,7 +424,7 @@ Demblyは`devcontainer.json`を書き換えない。
 
 複数のComposeファイルを使用する場合、管理対象Composeファイルを最後に置くことで、Demblyが注入する設定を最終的な有効値にする。
 
-### 7.6 `x-dembly`
+#### 7.5.1 `x-dembly`
 
 `x-dembly`は、管理対象Composeファイルに保存するDemblyの永続状態である。
 
@@ -391,43 +462,53 @@ x-dembly:
 
 `unapply`は`x-dembly.state`を削除するが、`x-dembly.lock`は保持する。
 
-### 7.7 Runtime計画
+### 7.6 `.dembly/runtime/<service>.toml`
 
-`.dembly/runtime/<service>.toml`は、Host Demblyが生成するRuntime Dembly専用の解決済み計画である。
+`.dembly/runtime/<service>.toml`は、Host Demblyが生成するRuntime Dembly専用の実行計画である。
 
 ```toml
 schema_version = 1
 lock_digest = "sha256:3333"
 
+# Runtime初期化後に切り替える利用者のDocker形式指定
 [runtime_user]
-name = "vscode"
-uid = 1000
-gid = 1000
-home = "/home/vscode"
+spec = "vscode"
 
+# マウントするCardとコンテナ内の配置先
 [[cards]]
 name = "clang"
 image = "/run/dembly/cards/clang.squashfs"
 mount_target = "/opt/dembly/cards/clang"
 
+# Composeが一時配置するHost BindとRuntimeが解決する最終配置先
+[[binds]]
+source = "/run/dembly/binds/0"
+target = "${HOME}/.gitconfig"
+mode = "ro"
+
+# Cardから共通パスへ公開するファイル
 [[exports]]
 source = "/opt/dembly/cards/clang/bin/clang"
 target = "/usr/local/bin/clang"
 
+# 元のプロセスへ渡す結合済み環境変数
 [environment]
 PATH = "/opt/dembly/cards/clang/bin:/workspace/bin:/usr/local/bin"
 
+# Runtime初期化後に実行する元のプロセス
 [process]
 argv = ["/usr/local/bin/start", "--watch"]
 ```
 
-Runtime計画には、コンテナ内の解決済みパスだけを保存する。
+Runtime計画には、コンテナ内の解決済みパスと、Runtimeで解決するHost Bindの`target`を保存する。
 
-未解決の変数とHost Bind先のファイル内容は保存しない。
+Host Bindの`target`に含まれる`${HOME}`と`${USER}`を除き、未解決の変数を保存しない。
+
+Host Bind先のファイル内容は保存しない。
 
 Runtime Demblyは`.dembly/config.toml`と`card.toml`を再解釈しない。
 
-### 7.8 `.gitignore`
+### 7.7 `.gitignore`
 
 `apply`は次の規則が不足している場合だけ追記する。
 
@@ -477,7 +558,22 @@ dembly card build <tool-root> <cards-root> [options]
 
 ### 9.2 `dembly init`
 
-`init`は、`.dembly/config.toml`が存在しない場合だけ設定を生成する。
+#### 入力
+
+- 任意の`--config <path>`
+- カレントディレクトリ以下の`card.toml`と`devcontainer.json`
+- Composeファイルとそのサービス定義
+- 候補を選択または確認するための標準入力
+
+#### 出力
+
+- `--config`の指定先、または`.dembly/config.toml`
+- 候補、質問、生成結果を示す標準出力
+- 警告とエラーを示す標準エラー
+
+#### 処理
+
+`init`は、設定ファイルが存在しない場合だけ設定を生成する。
 
 `--config`を省略した場合はカレントディレクトリの`.dembly/config.toml`を生成し、`.dembly/`がなければ作成する。
 
@@ -493,11 +589,32 @@ Dev Containersを使用しない場合は、Composeファイルとサービス�
 
 既存の設定、Composeファイル、Lockは書き換えない。
 
+#### エラー
+
+設定ファイルがすでに存在する場合、候補を解釈できない場合、選択されたサービスが存在しない場合、または出力を書き込めない場合は非ゼロで終了する。
+
 ### 9.3 `dembly validate`
 
-`validate`は、設定、選択Card、管理対象Composeファイル、任意の`devcontainer.json`を読み取る。
+#### 入力
 
-次の項目を検証する。
+- `--config`の指定先、または`.dembly/config.toml`
+- 選択された`card.toml`と`rootfs.squashfs`
+- 管理対象Composeファイル
+- 任意の`devcontainer.json`と、その`dockerComposeFile`が参照するComposeファイル
+- Docker Engineから取得する対象イメージのメタデータ
+
+標準入力は使用しない。
+
+#### 出力
+
+- 検証結果を示す標準出力
+- 任意のHost Bindの省略などを示す警告と、検証エラーを示す標準エラー
+
+ファイルは生成または更新しない。
+
+#### 処理
+
+`validate`はすべての入力を読み取り、次の項目を検証する。
 
 - TOMLとJSONのスキーマ
 - パスの正規化と許可された変数
@@ -509,7 +626,26 @@ Dev Containersを使用しない場合は、Composeファイルとサービス�
 
 ファイルを書き換えず、Card hookを実行せず、コンテナを起動しない。
 
+#### エラー
+
+入力の読取り、構文、スキーマ、パス、checksum、競合、対象サービス、イメージ、またはDev Containersの制約に違反した場合は非ゼロで終了する。
+
 ### 9.4 `dembly lock`
+
+#### 入力
+
+- `dembly validate`と同じ入力
+- 管理対象Composeファイルに既存の`x-dembly.state`がある場合はその内容
+
+標準入力は使用しない。
+
+#### 出力
+
+- `x-dembly.lock`を更新した管理対象Composeファイル
+- 解決したイメージIDとCardを示す標準出力
+- 警告とエラーを示す標準エラー
+
+#### 処理
 
 `lock`は`validate`相当の検証を行い、対象サービスが使用するイメージの不変IDを解決する。
 
@@ -521,7 +657,35 @@ Composeファイル全体のhashは自己参照を生じるため保存しない
 
 同じ入力に対するLockの直列化順序は決定的とする。
 
+#### エラー
+
+検証に失敗した場合、イメージIDを解決できない場合、既存の適用状態と競合する場合、またはComposeファイルを更新できない場合は非ゼロで終了する。
+
 ### 9.5 `dembly apply`
+
+#### 入力
+
+- `--config`の指定先、または`.dembly/config.toml`
+- 選択された`card.toml`と`rootfs.squashfs`
+- `x-dembly.lock`と任意の`x-dembly.state`を含む管理対象Composeファイル
+- 任意の`devcontainer.json`と、その`dockerComposeFile`が参照するComposeファイル
+- Docker Engineから取得する対象イメージのメタデータ
+- 現在実行中のDembly実行ファイル
+- 既存の`.gitignore`と`.dembly/volumes/`
+
+標準入力は使用しない。
+
+#### 出力
+
+- 更新した管理対象Composeファイル
+- `.dembly/runtime/<service>.toml`
+- `.dembly/runtime/bin/dembly`
+- `.dembly/volumes/`以下の必要なディレクトリ
+- 不足する除外規則を追加した`.gitignore`
+- 適用結果を示す標準出力
+- 警告とエラーを示す標準エラー
+
+#### 処理
 
 `apply`は有効なLockを要求する。
 
@@ -549,7 +713,28 @@ Lockの入力を再計算し、`x-dembly.lock`と一致しない場合は、`dem
 
 同じ入力への再適用では、Composeファイルと生成物に差分を発生させない。
 
+#### エラー
+
+Lockが欠落または無効な場合、検証または競合検出に失敗した場合、成果物を生成できない場合、またはファイルを更新できない場合は非ゼロで終了する。
+
 ### 9.6 `dembly unapply`
+
+#### 入力
+
+- `--config`の指定先、または`.dembly/config.toml`
+- `x-dembly.state`を含む管理対象Composeファイル
+- `.dembly/runtime/`
+
+標準入力は使用しない。
+
+#### 出力
+
+- 管理フィールドを適用前へ戻した管理対象Composeファイル
+- 削除された`.dembly/runtime/`
+- 適用解除の結果を示す標準出力
+- 警告とエラーを示す標準エラー
+
+#### 処理
 
 `unapply`は`x-dembly.state`を要求する。
 
@@ -565,11 +750,57 @@ Lockの入力を再計算し、`x-dembly.lock`と一致しない場合は、`dem
 
 `unapply`は実行中のコンテナを検出または停止しない。
 
+#### エラー
+
+適用状態が存在しない場合、管理フィールドが前回適用値と競合する場合、またはComposeファイルを復元できない場合は非ゼロで終了する。
+
 ### 9.7 `dembly inspect`
 
-`inspect`はコンテナを必要とせず、Deck root、対象サービス、管理対象Composeファイル、プロジェクト名、Lock、適用状態、Card、マウント、環境変数、指定利用者、次回の変更内容を表示する。
+#### 入力
+
+- `--config`の指定先、または`.dembly/config.toml`
+- 選択された`card.toml`と`rootfs.squashfs`
+- 管理対象Composeファイル
+- 任意の`devcontainer.json`と、その`dockerComposeFile`が参照するComposeファイル
+- Docker Engineから取得する対象イメージのメタデータ
+
+標準入力は使用しない。
+
+#### 出力
+
+- 解決済みDeckと適用予定の差分を示す標準出力
+- 警告とエラーを示す標準エラー
+
+ファイルは生成または更新しない。
+
+#### 処理
+
+`inspect`はコンテナを必要とせず、Deck root、対象サービス、管理対象Composeファイル、プロジェクト名、Lock、適用状態、Card、マウント、環境変数、指定利用者の指定、次回の変更内容を表示する。
+
+#### エラー
+
+入力を解決または検証できない場合は非ゼロで終了する。
 
 ### 9.8 `dembly check`
+
+#### 入力
+
+- `--config`の指定先、または`.dembly/config.toml`
+- 選択された`card.toml`と`rootfs.squashfs`
+- `x-dembly.lock`と`x-dembly.state`を含む管理対象Composeファイル
+- `.dembly/runtime/<service>.toml`
+- `.dembly/runtime/bin/dembly`
+
+標準入力は使用しない。
+
+#### 出力
+
+- 項目ごとの検査結果を示す標準出力
+- 警告とエラーを示す標準エラー
+
+ファイルは生成または更新しない。
+
+#### 処理
 
 Host側の`check`は、Lock、適用状態、生成済みRuntime計画、Runtime実行ファイル、Compose管理フィールドの整合性を検査する。
 
@@ -577,13 +808,38 @@ Cardの`[check]`は実行しない。
 
 Cardの実行時checkは、10.6節のDocker Compose操作を使用する。
 
+#### エラー
+
+Lockが欠落または無効な場合、適用が完了していない場合、生成物が欠落または不整合な場合、または管理フィールドが競合する場合は非ゼロで終了する。
+
 ### 9.9 `dembly card build`
 
-`card build`は`<tool-root>`の内容からSquashFSを生成し、`<cards-root>/<name>/`へ`rootfs.squashfs`と`card.toml`を出力する。
+#### 入力
+
+- `<tool-root>`のファイルシステム
+- `<cards-root>`の出力先
+- 任意の`--name`、`--version`、`--mount-target`、反復可能な`--path-prepend`
+- 任意の`--non-interactive`
+- 対話実行で不足する値を入力するための標準入力
+
+#### 出力
+
+- `<cards-root>/<name>/rootfs.squashfs`
+- `<cards-root>/<name>/card.toml`
+- 作成したCardのパスとSHA-256を示す標準出力
+- 警告とエラーを示す標準エラー
+
+#### 処理
+
+`card build`は`<tool-root>`の内容からSquashFSを生成し、`<cards-root>/<name>/`へ成果物を出力する。
 
 入力となるtool rootは変更しない。
 
 成果物は一時ファイルへ生成し、SHA-256を計算した後に置き換える。
+
+#### エラー
+
+必須値が得られない場合、入力または出力パスが不正な場合、`mksquashfs`または`sha256sum`が失敗した場合、または成果物を書き込めない場合は非ゼロで終了する。
 
 ## 10. Runtime DemblyとDocker Compose
 
@@ -597,20 +853,54 @@ Runtime DemblyはRuntime計画のスキーマとLock digestを検証してから
 
 Runtime Demblyは次の順序で処理する。
 
-1. CardのSquashFSを読み取り専用でマウントする。
-2. Volumeを配置する。
-3. Host Bindを確認する。
-4. exportを作成する。
-5. 環境変数を設定する。
-6. Cardのpost-mount hookを実行する。
-7. 指定利用者へ権限を変更する。
-8. 元のプロセスまたはCompose `run`で指定されたプロセスを`exec`する。
+1. 指定利用者とグループを解決する。
+2. CardのSquashFSを読み取り専用でマウントする。
+3. Volumeを配置する。
+4. Host Bindの一時マウントを確認し、`${HOME}`と`${USER}`を展開して最終マウント先へbind mountする。
+5. exportを作成する。
+6. 環境変数を設定する。
+7. Cardのpost-mount hookを実行する。
+8. 指定利用者へ権限を変更する。
+9. 1から8までがすべて成功した場合だけ、元のプロセスまたはCompose `run`で指定されたプロセスを`exec`する。
 
 いずれかの必須処理が失敗した場合は、最終プロセスを起動せず、Runtime Demblyを非ゼロで終了する。
 
+Runtime Demblyは、失敗した処理、関係するCard名または対象パス、原因を標準エラーへ出力する。
+
+`docker compose up`の前景実行と`docker compose run`では、標準エラーと終了ステータスから失敗を確認できる。
+
+`docker compose up -d`では、`docker compose ps -a`で終了状態を確認し、`docker compose logs <service>`で原因を確認する。
+
+Dev Containersではコンテナ起動失敗となり、起動ログにRuntime Demblyの標準エラーを表示する。
+
 ### 10.3 指定利用者
 
-指定利用者は、Composeサービスの`user`、イメージのDockerfile `USER`、rootの順で解決する。
+Host Demblyは、適用前のComposeサービスの`user`、イメージのDockerfile `USER`、`root`の順で利用者指定を選び、Runtime計画の`runtime_user.spec`へDocker形式の文字列として保存する。
+
+`runtime_user.spec`は`vscode`へ固定しない。
+
+次の形式を受け付ける。
+
+- `user`
+- `uid`
+- `user:group`
+- `uid:gid`
+
+Runtime Demblyは、コンテナ内の`/etc/passwd`と`/etc/group`を使用して、ユーザー名、UID、GID、ホームディレクトリを解決する。
+
+ユーザー部分をUIDで指定した場合も、対応する`/etc/passwd`のエントリを要求する。
+
+グループ部分を省略した場合は、`/etc/passwd`のプライマリGIDを使用する。
+
+グループ部分を名前で指定した場合は、対応する`/etc/group`のエントリを要求する。
+
+グループ部分を数値で指定した場合は、そのGIDを直接使用する。
+
+利用者またはグループを解決できない場合は、Cardをマウントせず、元のプロセスを起動しない。
+
+Dev Containersの`updateRemoteUserUID`によって既存利用者のUIDとGIDがHost利用者へ合わせられた場合、Runtime Demblyは変更後の`/etc/passwd`と`/etc/group`から値を取得する。
+
+Composeの変数展開によってHostのユーザー名、UID、GIDを`user`へ渡す場合も、ユーザー部分に対応する`/etc/passwd`のエントリがコンテナ内に必要である。
 
 Runtime Dembly自体とCardのpost-mount hookはrootで実行する。
 
@@ -619,6 +909,10 @@ Runtime Dembly自体とCardのpost-mount hookはrootで実行する。
 ### 10.4 Card、Volume、Host Bind
 
 すべてのCard filesystemは、コンテナ作成時に`/run/dembly/cards/`へ読み取り専用でbind mountする。
+
+すべてのHost Bindは、コンテナ作成時に`/run/dembly/binds/`へ宣言されたmodeでbind mountする。
+
+Runtime Demblyは一時マウントを利用者解決後の最終マウント先へ再度bind mountする。
 
 Deck private Volumeは`.dembly/volumes/<name>`、Card private Volumeは`.dembly/volumes/<card>/<name>`、shared Volumeは`.dembly/volumes/<name>`へ配置する。
 
@@ -750,4 +1044,7 @@ Runtime計画のスキーマを解釈できないRuntime Demblyは、Cardをマ�
 - `docker compose ps`、`logs`、`exec`、`run`、`down`がDembly適用済みの同じComposeプロジェクトへ直接作用する。
 - AIのDocker Compose運用と人間のDev Containers運用が、同じComposeファイル、Dockerfile、Cardを使用する。
 - Runtime初期化またはCard checkが失敗した場合、対象コマンドが非ゼロで終了する。
+- Runtime初期化が失敗した場合、元のプロセスとCompose `run`で指定されたプロセスが実行されない。
+- Runtime初期化の失敗理由を標準エラーと`docker compose logs`から確認できる。
+- 任意のDocker形式の利用者指定をRuntime計画へ保存し、コンテナ内の利用者情報からUID、GID、ホームディレクトリを解決できる。
 - 未対応のスキーマまたは未知のフィールドを検出した場合、入力ファイルを変更せずに終了する。
