@@ -54,8 +54,6 @@ dembly init|validate|lock|apply|unapply|inspect|check [--config <path>]
 dembly card build <tool-root> <cards-root>
 ```
 
-`up`、`down`、`run`、`exec` は提供してはならない。
-
 Host Dembly は Docker container を create、start、stop、remove、exec してはならない。
 
 `init` は existing config を上書きしてはならない。
@@ -136,3 +134,168 @@ AI の通常 exec は intended user を明示する。
 - SquashFS mount は Runtime 内だけに存在する。
 - 元の process は intended user で実行される。
 - AI の native Compose と人間の Dev Containers は同じ Compose、Dockerfile、Card を必須環境として使う。
+
+## 9. Command の契約
+
+### `dembly init`
+
+`init` は `.dembly/config.toml` が存在しない場合だけ生成する。
+
+検出した Card のうち採用するものを人間に選択させる。
+
+Compose Base 単独 mode では Compose file と service を入力させる。
+
+Dev Containers を選択した場合は、宣言済み service を表示して採用確認だけを行う。
+
+Compose file と lock は書き込まない。
+
+### `dembly validate`
+
+`validate` は config.toml、選択済み Card manifest、管理 Compose file、任意の devcontainer.json を読む。
+
+TOML schema、正規化済み path、Card checksum、競合、Volume layout、Host Bind variable、selected service、任意の Dev Containers 制約を検証する。
+
+file の書込み、Card hook の実行、container の起動をしてはならない。
+
+### `dembly lock`
+
+`lock` は検証を実行し、selected service の image identity を解決する。
+
+管理 Compose file の `x-dembly.lock` だけを書き込む。
+
+lock は管理 Compose path、selected service、解決済み image identity、全 selected Card identity を記録する。
+
+lock は Compose file 全体の hash を含んではならない。
+同じ file に保存すると自己参照になるためである。
+
+### `dembly apply`
+
+`apply` は valid lock を要求する。
+
+`.dembly/runtime/<service>.toml` と `.dembly/runtime/bin/dembly` を生成する。
+
+必要な Volume directory を `.dembly/volumes/` 配下に生成する。
+
+既存 file を untrack せず、生成 directory の不足 ignore pattern を追加する。
+
+管理 Compose file の selected service だけを更新する。
+
+管理 field は `entrypoint`、`command`、`user`、`privileged`、Dembly label、Dembly 所有 mount entry とする。
+
+Dembly 所有 mount entry は `/run/dembly/` 配下の Runtime target、または宣言済み Deck/Card Volume と Host Bind の target である。
+
+管理対象外 service と管理対象外 field を保持する。
+
+### `dembly unapply`
+
+`unapply` は x-dembly state を要求する。
+
+`original` を復元する前に、全管理 field を `applied` と比較する。
+
+config.toml、Card、Volume、利用者管理の initialize script、.gitignore entry は保持する。
+
+### `dembly inspect`
+
+`inspect` は実行中 container を要求せず configuration を読む。
+
+Deck root、selected service、管理 Compose file、lock state、Card identity、mount target、export、マージ済み PATH、Volume path、Host Bind、intended user、予定 Compose change を表示する。
+
+### `dembly check`
+
+`check` は valid lock を要求する。
+
+同じ適用済み configuration で temporary Compose Runtime を生成し、全 selected Card check を実行してから temporary Runtime だけを削除する。
+
+Volume data を保持する。
+
+## 10. Docker Compose の契約
+
+apply 成功後は Docker Compose だけを container lifecycle interface とする。
+
+```bash
+docker compose -f <managed-compose-file> up -d
+docker compose -f <managed-compose-file> ps
+docker compose -f <managed-compose-file> logs <service>
+docker compose -f <managed-compose-file> exec --user <intended-user> <service> sh
+docker compose -f <managed-compose-file> run --rm <service> <command...>
+docker compose -f <managed-compose-file> down
+```
+
+`up` は Runtime 初期化後に保存済み original entrypoint と command を起動する。
+
+`ps`、`logs`、`exec` は Runtime と同じ Compose project を観測または操作する。
+
+`--user` を指定しない `exec` は root となる。
+initializer が root であるためである。
+
+`run` は command を Runtime Dembly へ渡し、保存済み original process を置換する。
+
+`down` は container と network を削除するが、`.dembly/volumes/` を削除してはならない。
+
+top-level Compose `name` は利用者管理であり必須とする。
+
+Dembly はこれを検証するが変更してはならない。
+
+`name` と異なる明示的な `-p` または `COMPOSE_PROJECT_NAME` は supported invocation contract の対象外とする。
+
+## 11. Runtime plan format
+
+```toml
+schema_version = 1
+lock_digest = "sha256:..."
+
+[runtime_user]
+name = "vscode"
+uid = 1000
+gid = 1000
+home = "/home/vscode"
+
+[[cards]]
+name = "clang"
+image = "/run/dembly/cards/clang.squashfs"
+mount_target = "/opt/dembly/cards/clang"
+
+[[exports]]
+source = "/opt/dembly/cards/clang/bin/clang"
+target = "/usr/local/bin/clang"
+
+[environment]
+PATH = "/opt/dembly/cards/clang/bin:/usr/local/bin"
+
+[process]
+argv = ["/usr/local/bin/start", "--watch"]
+```
+
+plan は解決済み Runtime path だけを含む。
+
+未解決 variable と Host Bind secret content を含んではならない。
+
+## 12. Card、mount、environment の規則
+
+全 SquashFS file は Runtime 初期化前に `/run/dembly/cards/` へ read-only bind する。
+
+Runtime mount 順序は Card SquashFS、Volume、Host Bind、export とする。
+
+Deck private Volume は `.dembly/volumes/<name>` とする。
+
+Card private Volume は `.dembly/volumes/<card>/<name>` とする。
+
+shared Volume は `.dembly/volumes/<name>` とする。
+
+Volume physical path は symlink であってはならない。
+
+required Host Bind は存在しなければならない。
+
+存在しない optional Host Bind は warning を出して skip する。
+
+environment precedence は Base image、Compose service、config.toml、Card の順とする。
+
+同じ normal environment variable を定義する 2 Card は error とする。
+
+PATH は config order の Card entry、config entry、effective Base/Compose PATH の順に prepend する。
+
+export target は `/usr/local/bin/` に限定し、競合してはならない。
+
+hook は Card mount 後、final process 前に実行する。
+
+hook failure は final process の起動を妨げなければならない。
