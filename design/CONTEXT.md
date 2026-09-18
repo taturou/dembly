@@ -82,7 +82,7 @@ _Avoid_: 非 selected service への権限追加、production least privilege
 
 **Host Dembly CLI**:
 Deck の解決・検証・lock・Compose 適用を担う `validate`、`lock`、`apply`、`inspect`、`check`、`card build` の command 群。container lifecycle command は持たない。
-_Avoid_: dembly up/down/run/exec、Docker Compose の wrapper
+_Avoid_: Host Dembly による container lifecycle command、Docker Compose の wrapper
 
 **Dembly 初期化**:
 `dembly init` が初期 `.dembly/config.toml` を生成する支援操作。設定の正本は生成後も人間が編集・Git 管理し、init は既存 config を上書きしない。
@@ -97,8 +97,8 @@ Dev Containers integration を採用する `dembly init` が、`devcontainer.jso
 _Avoid_: Dembly と VS Code の異なる selected service、devcontainer.json の service 自動変更
 
 **Compose Base core**:
-Image Base を含まない Dembly の core mode。native Docker Compose で container lifecycle を実行し、Dev Containers は追加の起動・検証 integration として扱う。
-_Avoid_: Image Base、Dev Containers 必須
+Compose を唯一の基礎環境とする Dembly の core mode。native Docker Compose で container lifecycle を実行し、Dev Containers は追加の起動・検証 integration として扱う。
+_Avoid_: Compose を使わない基礎環境、Dev Containers 必須
 
 **Dembly 適用解除**:
 `dembly unapply` が、適用値との競合がない場合に `x-dembly` の `original` を復元し、Dembly 管理 field と生成 Runtime file を削除する操作。

@@ -5,7 +5,10 @@ repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 readme="$repository_root/README.md"
 japanese_readme="$repository_root/README-ja.md"
 compose_readme="$repository_root/examples/compose-base/README.md"
-image_readme="$repository_root/examples/image-base/README.md"
+compose_file="$repository_root/examples/compose-base/compose.yaml"
+config_file="$repository_root/examples/compose-base/.dembly/config.toml"
+devcontainer_file="$repository_root/examples/compose-base/.devcontainer/devcontainer.json"
+initialize_host="$repository_root/examples/compose-base/.devcontainer/initialize-host.sh"
 
 require() {
     local file=$1
@@ -43,11 +46,11 @@ require_exact_h2_sequence() {
         '## Compose Quickstart'
         '## Architecture'
         '## Core concepts'
-        '## Base types'
+        '## Configuration'
         '## Cards'
-        '## Deck configuration'
         '## CLI reference'
         '## Development'
+        '## Release'
         '## Limitations and evaluation'
         '## License'
     )
@@ -128,12 +131,18 @@ require "$readme" 'https://github.com/taturou/dembly/releases/latest/download/de
 require "$readme" 'https://github.com/taturou/dembly/releases/download/v1.2.3/dembly-install.sh'
 require "$readme" 'English | [日本語](README-ja.md)'
 require "$readme" '```mermaid'
-require "$readme" 'docker compose pull'
+require "$readme" 'dembly init'
 require "$readme" 'dembly validate'
 require "$readme" 'dembly lock'
-require "$readme" 'dembly up'
-require "$readme" 'dembly exec -- /bin/echo compose-runtime'
-require "$readme" 'dembly down'
+require "$readme" 'dembly apply'
+require "$readme" 'docker compose -f compose.yaml up -d'
+require "$readme" 'docker compose -f compose.yaml ps'
+require "$readme" 'docker compose -f compose.yaml logs dev'
+require "$readme" 'docker compose -f compose.yaml exec --user root dev'
+require "$readme" 'docker compose -f compose.yaml run --rm dev'
+require "$readme" '/run/dembly/bin/dembly __runtime check /run/dembly/runtime/dev.toml'
+require "$readme" 'docker compose -f compose.yaml down'
+require "$readme" 'dembly unapply'
 require "$readme" 'dembly --version'
 require "$readme" '(LICENSE)'
 require "$readme" 'Runtime mounts Card SquashFS'
@@ -147,12 +156,18 @@ require "$japanese_readme" 'English documentation: [README.md](README.md)'
 require_exact_line "$japanese_readme" '[English](README.md) | 日本語'
 require "$japanese_readme" 'https://github.com/taturou/dembly/releases/latest/download/dembly-install.sh'
 require "$japanese_readme" 'https://github.com/taturou/dembly/releases/download/v1.2.3/dembly-install.sh'
-require "$japanese_readme" 'docker compose pull'
+require "$japanese_readme" 'dembly init'
 require "$japanese_readme" 'dembly validate'
 require "$japanese_readme" 'dembly lock'
-require "$japanese_readme" 'dembly up'
-require "$japanese_readme" 'dembly exec -- /bin/echo compose-runtime'
-require "$japanese_readme" 'dembly down'
+require "$japanese_readme" 'dembly apply'
+require "$japanese_readme" 'docker compose -f compose.yaml up -d'
+require "$japanese_readme" 'docker compose -f compose.yaml ps'
+require "$japanese_readme" 'docker compose -f compose.yaml logs dev'
+require "$japanese_readme" 'docker compose -f compose.yaml exec --user root dev'
+require "$japanese_readme" 'docker compose -f compose.yaml run --rm dev'
+require "$japanese_readme" '/run/dembly/bin/dembly __runtime check /run/dembly/runtime/dev.toml'
+require "$japanese_readme" 'docker compose -f compose.yaml down'
+require "$japanese_readme" 'dembly unapply'
 require "$japanese_readme" 'dembly --version'
 require "$japanese_readme" '(LICENSE)'
 require "$japanese_readme" '| Base |'
@@ -183,19 +198,36 @@ done
 reject "$readme" 'implementation in progress'
 reject "$compose_readme" 'implementation in progress'
 
-require "$compose_readme" 'docker compose pull'
 require "$compose_readme" 'dembly validate'
 require "$compose_readme" 'dembly lock'
-require "$compose_readme" 'dembly up'
-require "$compose_readme" 'dembly exec -- /bin/echo compose-runtime'
-require "$compose_readme" 'dembly down'
+require "$compose_readme" 'dembly apply'
+require "$compose_readme" 'docker compose -f compose.yaml up -d'
+require "$compose_readme" 'docker compose -f compose.yaml ps'
+require "$compose_readme" 'docker compose -f compose.yaml logs dev'
+require "$compose_readme" 'docker compose -f compose.yaml exec --user root dev'
+require "$compose_readme" 'docker compose -f compose.yaml run --rm dev'
+require "$compose_readme" '/run/dembly/bin/dembly __runtime check /run/dembly/runtime/dev.toml'
+require "$compose_readme" 'docker compose -f compose.yaml down'
+require "$compose_readme" 'dembly unapply'
+require "$compose_readme" 'Do not use `-p` or `COMPOSE_PROJECT_NAME`'
 
-require "$image_readme" 'docker build -t dembly-fixture-base:local ../../tests/fixtures/image-base'
-require "$image_readme" 'dembly card build ../../tests/fixtures/hello-card/rootfs ./cards'
-require "$image_readme" '--name hello --version 1 --mount-target /opt/dembly/cards/hello'
-require "$image_readme" '--path-prepend bin --non-interactive'
-require "$image_readme" 'dembly validate'
-require "$image_readme" 'dembly lock'
-require "$image_readme" 'dembly run -- /bin/true'
+require "$compose_file" 'name: dembly-compose-example'
+require "$compose_file" 'x-dembly:'
+require "$config_file" '[compose]'
+require "$config_file" 'path = "../compose.yaml"'
+require "$devcontainer_file" '"dockerComposeFile": ["../compose.yaml"]'
+require "$devcontainer_file" '"initializeCommand": ".devcontainer/initialize-host.sh"'
+require "$initialize_host" 'dembly validate'
+require "$initialize_host" 'dembly apply'
+require "$initialize_host" 'dembly lock'
+
+for public_doc in "$readme" "$japanese_readme" "$compose_readme"; do
+    reject "$public_doc" 'deck\.toml|deck\.lock|dembly (up|down|run|exec)([^[:alnum:]_]|$)|Image Base|image-base|compose\.override'
+done
+
+if [[ -e "$repository_root/examples/image-base" ]]; then
+    printf 'obsolete examples/image-base directory still exists\n' >&2
+    exit 1
+fi
 
 printf 'documentation assertions passed\n'

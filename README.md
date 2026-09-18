@@ -6,15 +6,23 @@ English | [日本語](README-ja.md)
 
 ## Overview
 
-Dembly creates Linux development Runtimes from a Docker/OCI Base, immutable SquashFS Cards, and Deck-root storage declarations. A Deck is a `deck.toml` file that declares the Base, Cards, Volumes, Bind mounts, and environment. Dembly is distributed for Linux x86_64; using it does not require cloning this repository or building from source.
+Dembly compiles a Linux development environment from a user-authored Docker Compose project, immutable SquashFS Cards, and `.dembly/config.toml`.
+Host Dembly validates inputs, embeds the resolved Lock and apply state under top-level `x-dembly`, and updates only the selected service's managed fields.
+Native Docker Compose and optional VS Code Dev Containers own the container lifecycle.
+Dembly is distributed for Linux x86_64; using it does not require cloning this repository or building from source.
 
 ## Security warning
 
-Runtimes run privileged so that the Runtime can mount Card SquashFS files. Treat every Card as trusted code: Card root hooks run as root inside the Runtime. Host Binds expose host files according to their declared mode. Dembly does not provide a sandbox for untrusted Cards; do not use an untrusted Card, root hook, or Host Bind with it.
+The selected Runtime service runs privileged because Runtime Dembly mounts Card SquashFS files with the kernel.
+Runtime Dembly and Card post-mount hooks run as root before the original process starts as the intended user.
+Treat every Card and hook as trusted code, and review every Host Bind source and mode.
+Dembly does not sandbox untrusted Cards, hooks, or Host Binds.
 
 ## Installation
 
-Requirements are Linux x86_64, Docker Engine with its daemon running, and Docker Compose v2. Install the latest release:
+Requirements are Linux x86_64, Docker Engine with a reachable daemon, and the Docker Compose v2 plugin.
+Starting a Runtime also requires permission to create privileged containers plus host loop-device and SquashFS support.
+Install the latest release:
 
 ```sh
 curl -fsSL https://github.com/taturou/dembly/releases/latest/download/dembly-install.sh | bash
@@ -26,7 +34,8 @@ Or install a fixed release version:
 curl -fsSL https://github.com/taturou/dembly/releases/download/v1.2.3/dembly-install.sh | bash
 ```
 
-The installer verifies the downloaded release tarball against its published SHA-256 file, stores releases under `${XDG_DATA_HOME:-$HOME/.local/share}/dembly/releases`, and updates `~/.local/bin/dembly` to the selected version. Ensure `~/.local/bin` is on `PATH`, then confirm the installed CLI:
+The installer verifies the release archive against its published SHA-256 file, stores releases under `${XDG_DATA_HOME:-$HOME/.local/share}/dembly/releases`, and updates `~/.local/bin/dembly` to the selected version.
+Ensure `~/.local/bin` is on `PATH`, then confirm the installed CLI:
 
 ```sh
 dembly --version
@@ -34,171 +43,160 @@ dembly --version
 
 ## Compose Quickstart
 
-Create a directory and download the user-authored [compose.yaml](https://github.com/taturou/dembly/blob/main/examples/compose-base/compose.yaml) and [deck.toml](https://github.com/taturou/dembly/blob/main/examples/compose-base/deck.toml):
+The commands below download the runnable Compose example without its already-generated configuration, then use `dembly init` to create `.dembly/config.toml` interactively.
+Accept the detected `.devcontainer/devcontainer.json` and its `dev` service when prompted.
 
 ```sh
-mkdir dembly-compose-base
-cd dembly-compose-base
-curl -fsSLO https://raw.githubusercontent.com/taturou/dembly/main/examples/compose-base/compose.yaml
-curl -fsSLO https://raw.githubusercontent.com/taturou/dembly/main/examples/compose-base/deck.toml
-docker compose pull
+mkdir -p dembly-compose-example/.devcontainer
+cd dembly-compose-example
+curl -fsSLo compose.yaml https://raw.githubusercontent.com/taturou/dembly/main/examples/compose-base/compose.yaml
+curl -fsSLo .devcontainer/devcontainer.json https://raw.githubusercontent.com/taturou/dembly/main/examples/compose-base/.devcontainer/devcontainer.json
+curl -fsSLo .devcontainer/initialize-host.sh https://raw.githubusercontent.com/taturou/dembly/main/examples/compose-base/.devcontainer/initialize-host.sh
+chmod +x .devcontainer/initialize-host.sh
+
+docker compose -f compose.yaml pull
+dembly init
 dembly validate
 dembly lock
-dembly up
-dembly exec -- /bin/echo compose-runtime
-# Optional interactive shell:
-dembly exec -- /bin/sh
-dembly down
+dembly apply
+
+docker compose -f compose.yaml up -d
+docker compose -f compose.yaml ps
+docker compose -f compose.yaml logs dev
+docker compose -f compose.yaml exec --user root dev /bin/echo compose-runtime
+docker compose -f compose.yaml run --rm dev /bin/echo compose-run
+dembly check
+docker compose -f compose.yaml run --rm dev \
+  /run/dembly/bin/dembly __runtime check /run/dembly/runtime/dev.toml
+docker compose -f compose.yaml down
+
+dembly unapply
 ```
 
-`up` and `down` affect all services in the Compose project rooted at this Deck's `compose.yaml` (the project is named `dembly-<deck-name>`). They do not affect unrelated Docker containers on the host.
+The tracked example already includes the configuration produced by `init`, so start at `validate` when running it from a repository checkout.
+Every Docker Compose command must use the same ordered `-f` list as Dev Containers.
+Do not use `-p` or `COMPOSE_PROJECT_NAME` to replace the top-level Compose `name`; a different project name is outside Dembly's supported workflow.
+Run `unapply` only after `docker compose down`, because Dembly neither detects nor stops running containers.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Deck[Deck: deck.toml] --> Base[Base: Image or Compose service]
-  Deck --> Cards[Cards: card.toml + rootfs.squashfs]
-  Deck --> Volumes[Deck-root Volumes]
-  Deck --> Binds[Host Binds]
-  Base --> Runtime[Runtime container]
-  Cards --> Runtime
-  Volumes --> Runtime
-  Binds --> Runtime
-  Runtime -->|Runtime mounts Card SquashFS| Mounted[Mounted Card filesystems]
-  Host[Host] -.->|Host does not mount Card SquashFS| Cards
+  Inputs[config.toml + Cards + devcontainer.json] --> Host[Host Dembly]
+  Host --> Compose[User-authored Compose + embedded x-dembly]
+  Host --> Plan[Runtime plan + Runtime binary]
+  Compose --> Native[Docker Compose or Dev Containers]
+  Plan --> Runtime[Runtime Dembly as root]
+  Native --> Runtime
+  Runtime -->|Runtime mounts Card SquashFS| Cards[Mounted Card filesystems]
+  Runtime --> User[Original process as intended user]
+  HostNS[Host mount namespace] -.->|Host does not mount Card SquashFS| Cards
 ```
 
-The host only passes each Card's SquashFS file into the container. The privileged Runtime mounts it, applies Card exports and hooks, then starts the configured process.
+Host Dembly is a configuration compiler and does not create, start, stop, remove, or enter containers.
+Docker Compose is the only public container lifecycle interface.
 
 ## Core concepts
 
-- **Deck:** the root configuration. Relative paths resolve from the directory containing `deck.toml`; Dembly does not search parent directories.
-- **Base:** the container image or the selected service from a Compose file.
-- **Card:** an immutable `rootfs.squashfs` with a `card.toml` manifest, mounted at the manifest's target inside the Runtime.
-- **Volume:** persistent host-directory storage under the Deck root, not a Docker named volume. Deck-private storage is `volumes/<name>`; Card-private storage is `volumes/<card>/<name>`; `shared = true` uses `volumes/<name>`.
-- **Bind:** a host path mounted into the Runtime. Sources support `${HOST_HOME}` and `${DECK_ROOT}`; targets support `${USER}` and `${HOME}`. `required` defaults to `true`; a missing optional source is warned about and skipped.
-- **Lock:** `deck.lock` records the Base identity and Compose file checksum when applicable, plus Card manifest and filesystem checksums. `up`, `run`, and `check` reject a missing or stale lock.
+- **Deck:** one Compose service plus its Cards, persistent directories, Host Binds, and environment declarations.
+- **Deck root:** the `.dembly/` directory; configuration-relative paths and `${DECK_ROOT}` resolve from it.
+- **Card:** an immutable `card.toml` manifest and `rootfs.squashfs` filesystem mounted inside the Runtime.
+- **Managed Compose file:** the single user-authored Compose file that Dembly may update; it must contain a valid top-level `name`.
+- **Lock:** immutable image and Card identities stored under `x-dembly.lock`; only `dembly lock` updates it.
+- **Apply state:** original and last-applied values stored under `x-dembly.state` for conflict detection and restoration.
+- **Intended user:** the pre-apply service user, image user, or root fallback that runs the original process, Compose `run` command, and normal `exec` work.
 
-## Base types
+## Configuration
 
-| Base | Lifecycle | Use when |
-| --- | --- | --- |
-| Image | `up` creates and starts one `dembly-<deck-name>` Runtime container; `exec` enters it; `down` verifies ownership and removes it. `run` creates a temporary Runtime for one command and cleans it up. | One image is the complete service boundary. |
-| Compose | `up` writes a generated override for the selected service, then runs Compose for the Deck-root project; other services declared in that project also start. `exec` targets the selected service. `down` uses the same Compose files and project to stop the project and removes generated metadata. `run` runs the selected service command through that lifecycle. | The Runtime must retain a multi-service Compose topology. |
+`.dembly/config.toml` is the tracked source of truth after `init` creates it.
+Without `--config`, commands use only `.dembly/config.toml` in the current directory and do not search parents.
+
+```toml
+schema_version = 1
+
+[compose]
+path = "../compose.yaml"
+service = "dev"
+
+[devcontainer]
+path = "../.devcontainer/devcontainer.json"
+
+[[cards]]
+path = "/var/lib/dembly/cards/<replace-me>/card.toml"
+
+[environment]
+EXAMPLE_VARIABLE = "<replace-me>"
+
+[environment_path]
+prepend = ["/workspace/bin"]
+
+[[volumes]]
+name = "<replace-me>"
+target = "/workspace/<replace-me>"
+shared = false
+
+[[binds]]
+source = "${HOST_HOME}/<replace-me>"
+target = "${HOME}/<replace-me>"
+mode = "ro"
+required = false
+```
+
+The managed Compose file starts with a user-owned project name and an empty Dembly extension; `lock` and `apply` populate the extension in place.
+
+```yaml
+name: <replace-me>
+
+x-dembly:
+  schema_version: 1
+
+services:
+  dev:
+    image: <replace-me>
+```
+
+If Dev Containers are enabled, `dockerComposeFile` must include the managed file last, `service` must match, `overrideCommand` must be false or absent, `containerUser` must be root or absent, and `remoteUser` must match the intended user.
+Dembly reads but never rewrites `devcontainer.json`, `initializeCommand`, or its user-managed Host initialization script.
 
 ## Cards
 
-A Card directory contains `card.toml` and `rootfs.squashfs`. Build one from a tool root with real, non-interactive values:
+Build one Card from an existing tool root with explicit non-interactive metadata:
 
 ```sh
-dembly card build /opt/clang ./cards \
+dembly card build /opt/clang /var/lib/dembly/cards \
   --name clang --version 20.1.0 \
   --mount-target /opt/dembly/cards/clang \
   --path-prepend bin --non-interactive
 ```
 
-Without `--non-interactive`, Dembly prompts for the Card name, version, and mount target, supplying a name and mount-target default where possible. The builder creates the SquashFS artifact and records its checksum in `card.toml`; `validate` and `lock` verify it, and `up`, `run`, and `check` verify it again before use.
-
-## Deck configuration
-
-Use the following independent snippets in a `deck.toml` as needed.
-
-### Card
-
-```toml
-[[cards]]
-path = "cards/clang/card.toml"
-```
-
-### Volume
-
-```toml
-[[volumes]]
-name = "build"
-target = "/workspace/build"
-shared = false
-```
-
-### Bind
-
-```toml
-[[binds]]
-source = "${DECK_ROOT}"
-target = "/workspace"
-mode = "rw"
-required = true
-```
-
-### Environment
-
-```toml
-[environment]
-RUST_BACKTRACE = "1"
-
-[environment_path]
-prepend = ["/workspace/bin"]
-```
-
-### Lock
-
-```sh
-dembly lock
-```
-
-Run `lock` after changing the Base, selected Compose service, Compose file, or Card artifacts. It rewrites `deck.lock`; `up`, `run`, and `check` reject a stale lock.
-
-### Complete Compose Base template
-
-Replace every `<replace-me>` value and keep `compose.yaml` beside this `deck.toml`.
-
-```toml
-schema_version = 1
-name = "<replace-me>"
-
-[base]
-compose = "compose.yaml"
-service = "<replace-me>"
-
-[[cards]]
-path = "cards/<replace-me>/card.toml"
-
-[environment]
-EXAMPLE_VARIABLE = "<replace-me>"
-
-[[volumes]]
-name = "<replace-me>"
-target = "/<replace-me>"
-shared = false
-
-[[binds]]
-source = "${DECK_ROOT}/<replace-me>"
-target = "/<replace-me>"
-mode = "rw"
-required = true
-```
+Without `--non-interactive`, Dembly prompts for missing Card name, version, and mount target.
+The builder writes `card.toml` and `rootfs.squashfs`, then reports the filesystem SHA-256.
+After changing a Card, run `dembly lock`, `dembly apply`, and `up -d` with the same ordered Docker Compose `-f` list; the Lock digest change makes Compose recreate the selected container without rebuilding the base image.
 
 ## CLI reference
 
-All Deck arguments are optional paths to `deck.toml`; without one, the current directory must contain `deck.toml`.
+Configuration commands accept optional `--config <path>`; no positional configuration path is supported.
 
-| Command | Effect | Fails when |
+| Command | Effect | Important failure conditions |
 | --- | --- | --- |
-| `dembly --version` | Prints the bare installed package version. | The executable cannot start. |
-| `dembly validate [deck.toml]` | Resolves and validates a Deck and Card filesystems without creating a Runtime. | The Deck, paths, declarations, or Card checksums are invalid. |
-| `dembly lock [deck.toml]` | Writes `deck.lock` with the current image/Compose and Card identities. | Docker cannot inspect the Base, the Compose service is invalid, or a Card is invalid. |
-| `dembly up [deck.toml]` | Creates persistent Runtime state and starts the Image Runtime or Deck-root Compose project. | The lock is missing/stale, a Runtime already exists, Docker fails, or the Base has no startup command. |
-| `dembly down [deck.toml]` | Stops only a Dembly-owned Runtime; for Compose, tears down its Deck-root project and removes generated metadata. | Runtime metadata or ownership labels are absent/invalid, or Docker/Compose fails. |
-| `dembly run [deck.toml] -- <command...>` | Runs one command in a temporary Runtime and removes temporary Runtime state afterward. | `-- <command...>` is absent, the lock is missing/stale, or Runtime startup fails. |
-| `dembly exec [deck.toml] -- <command...>` | Executes one command in the already-running Runtime. | `-- <command...>` is absent, no owned Runtime is running, Runtime metadata cannot be read, or command execution fails. |
-| `dembly inspect [deck.toml]` | Prints the resolved Deck plan. | The Deck cannot be resolved. |
-| `dembly check [deck.toml]` | Runs each configured Card check; Compose checks temporarily start and stop its project. | The lock is missing/stale, Runtime setup fails, or any Card check fails. |
-| `dembly card build <tool-root> <cards-root> [options]` | Builds a Card artifact under `<cards-root>`. Options: `--name`, `--version`, `--mount-target`, repeatable `--path-prepend`, and `--non-interactive`. | Required arguments or non-interactive metadata are missing, `mksquashfs` fails, or output cannot be written. |
-| `dembly help` | Prints the public command list. | No normal failure condition. |
+| `dembly --version` | Prints the installed package version. | The executable cannot start. |
+| `dembly init [--config <path>]` | Interactively discovers fixed Card and Dev Containers locations and creates the initial configuration. | The output already exists, a selection is invalid, or configuration cannot be written. |
+| `dembly validate [--config <path>]` | Validates schemas, paths, checksums, Compose resolution, Dev Containers constraints, and managed-field conflicts without writing. | Any input or resolved relation is invalid. |
+| `dembly lock [--config <path>]` | Resolves immutable image and Card identities into `x-dembly.lock`. | Validation, image inspection, conflict detection, or atomic replacement fails. |
+| `dembly apply [--config <path>]` | Writes Runtime artifacts and applies managed fields to the selected service. | The Lock is missing or stale, managed fields conflict, or artifact creation fails. |
+| `dembly unapply [--config <path>]` | Restores original managed fields and removes Runtime artifacts while retaining Lock and volumes. | Apply state is absent, managed fields conflict, or restoration fails. |
+| `dembly inspect [--config <path>]` | Displays the resolved Deck and proposed changes without writing. | Inputs cannot be resolved or validated. |
+| `dembly check [--config <path>]` | Checks Lock, apply state, Runtime artifacts, and managed fields without running Card checks. | Static Host state is missing, stale, or conflicting. |
+| `dembly card build <tool-root> <cards-root> [options]` | Builds an immutable Card artifact. | Metadata, paths, `mksquashfs`, hashing, or output replacement fails. |
+| `dembly help` | Prints the public Host command list. | No normal failure condition. |
+
+`dembly check` prints the native Compose command for Runtime Card checks.
+Runtime initialization failures appear as nonzero Compose status; use `docker compose ps -a` and `docker compose logs <service>` to inspect detached startup failures.
 
 ## Development
 
-Source development uses [mise](https://mise.jdx.dev/) and the repository's configured Rust toolchain. Clone the repository only for development, then run:
+Source development uses [mise](https://mise.jdx.dev/) and the repository's configured Rust toolchain.
+Clone the repository only for development, then run:
 
 ```sh
 ./scripts/setup-dev.sh
@@ -210,46 +208,34 @@ mise exec -- cargo test --locked
 mise exec -- cargo build --locked --release --target x86_64-unknown-linux-musl -p dembly-cli
 ```
 
-`scripts/check-linux.sh` checks the complete Linux development environment, including Docker, Compose, SquashFS support, and required host tools.
+`scripts/check-linux.sh` checks Docker, Compose, privileged-container capability, loop devices, SquashFS support, and required host tools.
+The optional Dev Containers validation requires the `devcontainer` CLI.
 
 ## Release
 
-`scripts/release.sh` builds and publishes a Linux x86_64 release. Run it only from a clone that has permission to push to `taturou/dembly`.
-
-Before a normal release, install the development environment above and authenticate the GitHub CLI with an account that has repository write access:
+`scripts/release.sh` builds and publishes a Linux x86_64 release from a clean `main` worktree whose `HEAD` equals `origin/main`.
+Authenticate GitHub CLI with repository write access before a normal release:
 
 ```sh
 gh auth login
-```
-
-The normal release command requires a clean `main` worktree whose `HEAD` equals `origin/main`. It runs the Linux environment check, formatting, Clippy, tests, and the release build. If a version argument differs from `[workspace.package].version`, it updates `Cargo.toml` and `Cargo.lock`, commits `chore(release): prepare v<VERSION>`, and pushes that commit. It then creates and pushes tag `v<VERSION>` and publishes a GitHub Release with the archive, its SHA-256 file, and the installer.
-
-```sh
-# Publish the version already declared in Cargo.toml.
 scripts/release.sh
-
-# Set, commit, and publish a specific SemVer version.
 scripts/release.sh 1.2.3
 ```
 
-Use `--dry-run` to run the same quality gates and packaging in a temporary detached worktree. It neither changes the current worktree nor pushes commits, tags, or releases; generated artifacts are removed with the temporary worktree.
+Use `--dry-run` to run the same gates and packaging in a temporary detached worktree without pushing commits, tags, or releases.
+Use `--clean <version>` only to remove locally generated archive, checksum, and build-info files before rebuilding that version.
 
 ```sh
 scripts/release.sh --dry-run
 scripts/release.sh --dry-run 1.2.3-rc.1
-```
-
-Use `--clean` only to remove locally generated archive, checksum, and build-info files for a version before recreating them. It does not remove the generated installer and does not affect GitHub.
-
-```sh
 scripts/release.sh --clean 1.2.3
 ```
 
-All version arguments must be valid SemVer. Existing local artifacts must match the current commit; otherwise, clean that version's artifacts before rerunning the release.
-
 ## Limitations and evaluation
 
-Dembly currently supports Linux x86_64 and `x86_64-unknown-linux-musl` release binaries. Rootless Docker is outside its supported Runtime model because Card mounting requires privileged execution. The layouts below are illustrative artifact organization, not measurements.
+Dembly currently supports Linux x86_64 and `x86_64-unknown-linux-musl` release binaries.
+Rootless Docker is outside the supported Runtime model because kernel SquashFS mounting requires a privileged container.
+The layouts below illustrate artifact organization and are not measurements.
 
 | Case | Conventional layout | Dembly artifact layout |
 | --- | --- | --- |
@@ -260,4 +246,5 @@ Dembly currently supports Linux x86_64 and `x86_64-unknown-linux-musl` release b
 
 ## License
 
-See [LICENSE](LICENSE). The source is publicly available for viewing and forking; copying, modification, redistribution, and commercial use require the copyright holder's prior written permission.
+See [LICENSE](LICENSE).
+The source is available for viewing and GitHub forks; copying, modification, redistribution, and commercial use require prior written permission from the copyright holder.

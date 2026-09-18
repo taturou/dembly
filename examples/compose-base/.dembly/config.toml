@@ -1,0 +1,8 @@
+schema_version = 1
+
+[compose]
+path = "../compose.yaml"
+service = "dev"
+
+[devcontainer]
+path = "../.devcontainer/devcontainer.json"

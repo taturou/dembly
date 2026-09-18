@@ -1,52 +1,49 @@
 # Requirement Traceability
 
-| Requirement | Evidence | Status |
+`design/spec.md` 14節の受入条件を、上から順に AC-14-01 から AC-14-20 として対応付けます。
+
+## 14節の受入条件
+
+| ID | 受入条件 | 自動化された証拠 |
 | --- | --- | --- |
-| REQ-DOD-001 to REQ-DOD-003 | `scripts/setup-dev.sh` を連続 2 回実行 | Verified; mise install、Rust target/component setup、prerequisite check は idempotent |
-| REQ-PER-001 to REQ-PER-003, REQ-DSK-001, REQ-DOD-017 | README の `Evaluation procedure` | Representative workload の 5 回 median、overhead target、disk comparison method を文書化 |
-| REQ-DOD-016 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | テスト専用 Card の `card.toml` による filesystem、mount、environment、PATH、export、hook、check の Runtime 反映を end-to-end verified |
-| REQ-DCK-002 to REQ-DCK-004 | `discovery_does_not_search_parent_directories` | Unit tested |
-| REQ-CFG-004 | `deck_parser_rejects_unknown_fields` | Unit tested |
-| REQ-CRD-040 to REQ-CRD-041 | `checksum_verification_accepts_matching_file_and_rejects_mismatch`, `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Unit and pre-Runtime integration tested |
-| REQ-BND-001 to REQ-BND-007 | `bind_variables_are_scoped_by_source_and_target`, `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Unit and Image Runtime integration tested |
-| REQ-VOL-011 to REQ-VOL-021 | `volume_layout_distinguishes_private_and_shared_card_volumes`, `mixed_shared_volume_declarations_are_rejected`, `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Unit and Image Runtime persistence integration tested |
-| REQ-MNT-001 to REQ-MNT-002 | `exact_mount_target_collision_is_rejected_but_nested_targets_are_allowed` | Unit tested |
-| REQ-ENV-001 to REQ-ENV-012 | `card_environment_overrides_deck_and_path_preserves_card_order`, `duplicate_card_environment_keys_are_rejected`, `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Unit and Image Runtime integration tested |
-| REQ-CBL-021 | `non_interactive_build_requires_name_and_version_without_prompting` | Unit tested |
-| REQ-CBL-010, REQ-CBL-011, REQ-DOD-015 | `card_build_interactive_creates_an_artifact_from_prompted_values` | Docker-independent integration tested |
-| REQ-RST-004, REQ-IMG-003 | `image_runtime_plan_binds_same_binary_and_card_files_read_only` | Unit tested |
-| REQ-SQF-021 to REQ-SQF-024 | `runtime_mount_uses_external_read_only_kernel_squashfs_command` | Unit tested |
-| REQ-CMP-010 to REQ-CMP-011 | `compose_override_changes_only_selected_service_with_internal_entrypoint` | Unit tested |
-| REQ-CLI-001 | `validate_checks_card_manifest_and_filesystem_from_deck_root` | Unit tested |
-| REQ-CLI-060 | `inspect_displays_deck_name_base_and_card_without_runtime` | Unit tested |
-| REQ-LCK-001 to REQ-LCK-023 | `dembly lock`, `enforce_image_lock`, `enforce_compose_lock`, `lock_writer_round_trips_*` | Parser/writer unit tested; Image/Compose lock creation and enforcement basic integration verified |
-| REQ-CLI-020 to REQ-CLI-052 | `up`, `down`, `run_command`, `exec_command`, Image/Compose lifecycle integration | Image/Compose lifecycle と `exec` の resolved environment integration verified |
-| REQ-CMP-020 to REQ-CMP-034 | `up_compose`, `down_compose`, `run_compose`, `exec_compose`, `check_compose`, `compose_base_runs_a_temporary_command_and_cleans_up` | Basic `run`、`up`、`exec`、`down`、`check` lifecycle と effective command override を Docker integration verified |
-| REQ-USR-001 to REQ-USR-007 | `runtime_probe`, `probe_image_user`, `runtime_user`, `image_base_preserves_non_root_runtime_user` | Unit and non-root Image Runtime integration verified |
-| REQ-RUN-010 to REQ-RUN-011 | `runtime_command`, `create_exports`, `run_hooks`, `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Image Runtime の SquashFS mount、export、post-mount hook integration verified |
-| REQ-CHK-003 to REQ-CHK-006 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Image Runtime で Card check の実行と failure propagation を integration verified |
-| IT-001, IT-003, IT-006 to IT-008, IT-010, IT-014, IT-019 to IT-020, IT-022, IT-027, IT-029 to IT-033, IT-035 | Image Runtime fixture and `image_base_preserves_non_root_runtime_user` | Verified by `cargo test --workspace` on this Docker/SquashFS host |
-| IT-036, IT-038, IT-039 | `compose_base_runs_a_temporary_command_and_cleans_up` | Verified by `cargo test --workspace` on this Docker/Compose host |
-| IT-040 | `discovery_does_not_search_parent_directories` | Unit tested |
-| IT-011 | `validate_rejects_duplicate_card_names_from_distinct_manifests` | Verified by `cargo test -p dembly-cli --test integration validate_rejects_duplicate_card_names_from_distinct_manifests` |
-| IT-012 | `validate_rejects_duplicate_export_targets` | Verified by `cargo test -p dembly-cli --test integration validate_rejects_duplicate_export_targets` |
-| IT-013 | `validate_rejects_exact_card_mount_target_collisions` | Verified by `cargo test -p dembly-cli --test integration validate_rejects_exact_card_mount_target_collisions` |
-| IT-002 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Two synthetic Cards are mounted at distinct targets and executable paths are verified in the Runtime |
-| IT-009 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | A failed post-mount hook prevents `dembly run` from starting the final command |
-| IT-034 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | A changed Card manifest is rejected by `run` until explicit `lock` refresh |
-| IT-028 | `image_base_applies_test_card_manifest_without_host_squashfs_mount` | Selecting fewer Cards leaves the Docker Base image ID unchanged |
-| IT-037 | `compose_base_runs_a_temporary_command_and_cleans_up` | Non-selected `sidecar` remains command-executable after selected service Runtime initialization |
-| IT-025 | `validate_warns_and_skips_an_optional_missing_bind` | Missing `required = false` bind emits warning and validation succeeds |
-| IT-026 | `validate_rejects_a_required_missing_bind` | Missing required bind makes validation fail |
-| IT-021, IT-023 to IT-024 | `inspect_expands_host_and_runtime_bind_variables` | `${HOST_HOME}`, `${USER}`, `${HOME}` are expanded into resolved bind paths |
-| IT-015 to IT-016 | `inspect_uses_private_card_and_shared_volume_layouts` | Private Card Volume and shared Volume resolve under their specified Deck-root layouts |
-| IT-017 | `validate_rejects_mixed_shared_volume_declarations` | Mixed shared/private declarations for one name are rejected |
-| IT-018 | `validate_rejects_a_symlinked_volume_path` | A physical Volume symlink is rejected |
-| IT-005 | `image_base_executes_a_symlink_from_a_card_filesystem` | A relative executable symlink inside a Card SquashFS resolves and runs in the Runtime |
-| IT-004 | `image_base_executes_a_mmap_backed_executable_from_a_card_filesystem` | A static executable that calls `mmap(2)` runs from a Card SquashFS in the Runtime |
-| REQ-DOD-006 to REQ-DOD-016 | Image/Compose lifecycle とテスト専用 Card acceptance | Verified |
+| AC-14-01 | `init` が人間の選択を経て `.dembly/config.toml` を生成する | `one_card_candidate_requires_an_explicit_adoption_confirmation`、`selected_devcontainer_shows_service_and_compose_sequence_before_confirmation`、`no_devcontainer_prompts_for_compose_path_and_service` |
+| AC-14-02 | `init` が固定した Card と Dev Containers の探索位置だけを対象とし、深い階層と symlink を除外する | `discovers_only_direct_regular_files_in_fixed_roots_in_lexical_order`、`excludes_symlinked_directories_and_candidate_files`、`excludes_cards_when_a_fixed_root_parent_is_a_symlink` |
+| AC-14-03 | 公開 Host command が container lifecycle と container 内 command を実行しない | `public_help_lists_host_commands_without_legacy_lifecycle_commands`、`validate_resolves_explicit_config_without_writing_project_files`、`check_verifies_static_host_integrity_without_running_card_checks`、各 Host command fixture の read-only Docker call assertion |
+| AC-14-04 | `lock` だけが `x-dembly.lock` を更新する | `set_lock_changes_only_the_embedded_lock_and_is_deterministic`、`lock_embeds_resolved_identities_and_is_idempotent`、`apply_stages_runtime_artifacts_and_updates_only_the_selected_service` |
+| AC-14-05 | Lock がないか無効な場合に `apply` と `check` が失敗する | `apply_requires_a_fresh_lock_before_writing_and_reapply_is_stable`、`check_rejects_a_missing_lock_without_writing_project_files`、`check_rejects_a_stale_lock_without_writing_project_files` |
+| AC-14-06 | `apply` が選択 service だけを更新し、他 service と管理外 field を保持する | `first_apply_records_exact_values_and_preserves_other_services_and_entries`、`apply_stages_runtime_artifacts_and_updates_only_the_selected_service` |
+| AC-14-07 | `apply` と `unapply` が外部変更を検出し、利用者の変更を上書きしない | `apply_rejects_external_managed_field_edits_without_artifact_writes`、`unapply_conflict_preserves_compose_and_runtime`、`unapply_conflict_leaves_every_managed_value_and_state_unchanged` |
+| AC-14-08 | 同じ入力への `lock` と `apply` が追跡対象 file に差分を残さない | `lock_embeds_resolved_identities_and_is_idempotent`、`apply_requires_a_fresh_lock_before_writing_and_reapply_is_stable`、`identical_reapply_is_byte_stable_after_initial_normalization` |
+| AC-14-09 | `apply` 直後の `unapply` が管理 field を適用前へ戻す | `unapply_restores_original_fields_and_retains_persistent_data`、`unapply_restores_missing_and_null_and_removes_only_state` |
+| AC-14-10 | Card 変更が基礎 image の再 build なしで Compose container の再作成へ反映される | `native_compose_owns_applied_runtime_lifecycle` |
+| AC-14-11 | SquashFS mount が Runtime の mount namespace だけに存在する | `native_compose_owns_applied_runtime_lifecycle`、`card_mount_command_is_always_read_only` |
+| AC-14-12 | Runtime Dembly と post-mount hook が root で動作する | `init_runs_root_setup_in_strict_order_before_intended_user_exec`、`non_root_init_stops_before_plan_or_account_reads_and_mounts`、`native_compose_owns_applied_runtime_lifecycle` |
+| AC-14-13 | 元の process、Compose `run` command、Dev Containers 接続 process が指定利用者で動作する | `init_uses_saved_argv_by_default_and_replaces_it_with_compose_run_argv`、`native_compose_owns_applied_runtime_lifecycle` と同 test 内の `devcontainer read-configuration` assertion |
+| AC-14-14 | native Compose の `ps`、`logs`、`exec`、`run`、`down` が同じ project へ作用する | `native_compose_owns_applied_runtime_lifecycle` |
+| AC-14-15 | AI の native Compose 運用と人間の Dev Containers 運用が同じ Compose file、Dockerfile、Card を使用する | `native_compose_owns_applied_runtime_lifecycle` と同 test 内の Compose file order、service、user assertion |
+| AC-14-16 | Runtime 初期化または Card check の失敗が非ゼロになる | `setup_failure_names_the_operation_and_target_and_prevents_drop_and_exec`、`check_failure_names_card_and_path_and_stops_later_checks`、`native_compose_owns_applied_runtime_lifecycle` |
+| AC-14-17 | Runtime 初期化失敗時に元の process と Compose `run` command を実行しない | `invalid_plan_or_user_stops_before_card_mount`、`environment_failure_prevents_root_hook_privilege_drop_and_exec`、`setup_failure_names_the_operation_and_target_and_prevents_drop_and_exec` |
+| AC-14-18 | Runtime 初期化の失敗理由を標準エラーと Compose logs から確認できる | `setup_failure_names_the_operation_and_target_and_prevents_drop_and_exec`、`native_compose_owns_applied_runtime_lifecycle` |
+| AC-14-19 | Docker 形式の利用者指定を保存し、container 内情報から UID、GID、home を解決する | `intended_user_falls_back_to_image_user_then_root`、`resolves_user_and_uid_with_primary_gid_fallback`、`resolves_named_and_numeric_explicit_groups`、`rejects_unresolvable_or_malformed_user_specs` |
+| AC-14-20 | 未対応 schema または未知 field の検出時に入力 file を変更しない | `config_parser_requires_compose_and_rejects_unknown_fields_and_schema_versions`、`invalid_project_and_x_dembly_schemas_are_rejected_without_writes`、`runtime_config_rejects_unknown_fields_at_every_level`、`runtime_config_requires_supported_schema_and_nonempty_lock_digest`、read-only Host command tests |
 
-`cargo test --workspace` covers the unit tests listed above.
+## 横断的な仕様証拠
 
-静的 musl binary は `cargo build --release --target x86_64-unknown-linux-musl -p dembly-cli` で検証済みです。
-Docker、Compose、SquashFS mount、loop device はテスト環境で利用可能である必要があります。
+| 仕様領域 | 自動化された証拠 |
+| --- | --- |
+| Card checksum と Lock digest | `checksum_verification_accepts_matching_file_and_rejects_mismatch`、`digest_changes_with_manifest_or_verified_filesystem_identity`、`verifies_card_filesystem_checksum_before_docker_inspection` |
+| Card、mount、export、environment の競合 | `exact_mount_target_collision_is_rejected_but_nested_targets_are_allowed`、`validate_rejects_duplicate_export_targets_across_cards`、`duplicate_card_environment_keys_are_rejected` |
+| Volume と Host Bind | `volume_layout_distinguishes_private_and_shared_card_volumes`、`mixed_shared_volume_declarations_are_rejected`、`validate_rejects_a_missing_required_host_bind`、`validate_warns_about_an_optional_missing_bind_without_writing_project_files` |
+| Dev Containers 契約 | `loads_string_and_array_compose_files_with_strict_field_types`、`validates_devcontainer_against_the_managed_compose_contract`、`rejects_devcontainer_cross_file_mismatches` |
+| 原子的な file 更新 | `atomic_replace_preserves_permissions_and_replaces_all_bytes`、`atomic_replace_write_failure_leaves_the_target_unchanged`、`artifact_generation_failure_keeps_the_applied_compose_and_all_artifacts` |
+| Card build | `interactive_card_build_reads_prompts_and_reports_artifact_checksum`、`card_build_non_interactive_rejects_missing_required_options` |
+
+## 手動環境の前提
+
+`cargo test --workspace` の完全実行には、接続可能な Linux Docker Engine と Docker Compose plugin が必要です。
+
+`native_compose_owns_applied_runtime_lifecycle` には、root または Docker daemon を利用できる権限、privileged container の起動能力、loop device、kernel SquashFS support、`mksquashfs`、musl target が必要です。
+
+同 test の Dev Containers 設定検証には `devcontainer` CLI が必要であり、未導入環境ではこの任意 integration の検証前提を満たしません。
+
+Host mount namespace に Runtime の Card mount が現れないこと、Compose project label がトップレベル `name` と一致すること、Card 更新後に container ID が変わって image ID が変わらないことは、`native_compose_owns_applied_runtime_lifecycle` が対応する環境上で検証します。

@@ -1,0 +1,10 @@
+{
+  "name": "Dembly Compose example",
+  "dockerComposeFile": ["../compose.yaml"],
+  "service": "dev",
+  "initializeCommand": ".devcontainer/initialize-host.sh",
+  "overrideCommand": false,
+  "containerUser": "root",
+  "remoteUser": "root",
+  "updateRemoteUserUID": false
+}
