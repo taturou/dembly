@@ -1,4 +1,5 @@
 mod args;
+pub mod artifacts;
 mod host_plan;
 pub mod runtime;
 

@@ -82,12 +82,11 @@ fn dispatch(
         HostCommand::Init(context) => commands::init::run(&context, input, output),
         HostCommand::Validate(context) => commands::validate::run(&context, output),
         HostCommand::Lock(context) => commands::lock::run(&context, output),
+        HostCommand::Apply(context) => commands::apply::run(&context, output),
+        HostCommand::Unapply(context) => commands::unapply::run(&context, output),
         HostCommand::Inspect(context) => commands::inspect::run(&context, output),
         HostCommand::Check(context) => commands::check::run(&context, output),
         HostCommand::CardBuild(arguments) => card_build(&arguments),
-        HostCommand::Apply(_) | HostCommand::Unapply(_) => {
-            Err(CliError::new("command is not implemented yet"))
-        }
     }
 }
 
