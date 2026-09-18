@@ -1,3 +1,4 @@
+use dembly_core::{CardIdentity, LockInput};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::{Mapping, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -49,23 +50,8 @@ pub struct ManagedMount {
     pub value: Value,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CardLock {
-    pub name: String,
-    pub version: String,
-    pub manifest_sha256: String,
-    pub filesystem_sha256: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DemblyLock {
-    pub compose_path: String,
-    pub service: String,
-    pub image: String,
-    pub cards: Vec<CardLock>,
-}
+pub type CardLock = CardIdentity;
+pub type DemblyLock = LockInput;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

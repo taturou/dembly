@@ -3,6 +3,7 @@
 mod checksum;
 mod discovery;
 mod error;
+mod identity;
 mod model;
 mod parse;
 mod planning;
@@ -11,6 +12,7 @@ mod resolution;
 pub use checksum::{sha256_file, verify_card_filesystem};
 pub use discovery::{discover_config, discover_init_candidates, CardCandidate, InitCandidates};
 pub use error::CoreError;
+pub use identity::{CardIdentity, LockInput};
 pub use model::{
     Bind, CardCheck, CardDocument, CardMount, CardReference, ComposeReference, ConfigDocument,
     DevcontainerReference, Environment, Export, Filesystem, Hook, Volume,

@@ -23,6 +23,7 @@ name = "dembly-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "toml",
 ]
 
@@ -30,6 +31,7 @@ dependencies = [
 name = "dembly-docker"
 version = "0.1.0"
 dependencies = [
+ "dembly-core",
  "serde",
  "serde_json",
  "serde_yaml",

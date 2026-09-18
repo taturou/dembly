@@ -1,13 +1,12 @@
+use crate::commands::lock::resolved_lock;
 use crate::commands::validate::write_warnings;
 use dembly_cli::{CliError, HostContext, HostPlan};
-use dembly_core::sha256_file;
-use dembly_docker::{CardLock, DemblyLock};
+use dembly_core::LockInput;
 use dembly_runtime::load_runtime_config;
 use serde_yaml::Value;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 const LOCK_DIGEST_LABEL: &str = "io.dembly.lock-digest";
 
@@ -15,7 +14,7 @@ pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError
     let plan = HostPlan::resolve(&context.config_path)?;
     write_warnings(&plan);
     let lock = require_current_lock(&plan)?;
-    let digest = canonical_lock_digest(&lock)?;
+    let digest = lock.digest();
     let state = plan
         .managed_compose
         .state()
@@ -78,11 +77,11 @@ pub(crate) fn lock_status(plan: &HostPlan) -> &'static str {
     }
 }
 
-fn require_current_lock(plan: &HostPlan) -> Result<DemblyLock, CliError> {
+fn require_current_lock(plan: &HostPlan) -> Result<LockInput, CliError> {
     current_lock(plan)?.ok_or_else(|| CliError::new("Dembly Lock is missing; run dembly lock"))
 }
 
-fn current_lock(plan: &HostPlan) -> Result<Option<DemblyLock>, CliError> {
+fn current_lock(plan: &HostPlan) -> Result<Option<LockInput>, CliError> {
     let lock = plan
         .managed_compose
         .lock()
@@ -96,29 +95,6 @@ fn current_lock(plan: &HostPlan) -> Result<Option<DemblyLock>, CliError> {
     } else {
         Err(CliError::new("Dembly Lock is stale; run dembly lock"))
     }
-}
-
-fn resolved_lock(plan: &HostPlan) -> Result<DemblyLock, CliError> {
-    let cards = plan
-        .deck
-        .cards
-        .iter()
-        .map(|card| {
-            Ok(CardLock {
-                name: card.document.name.clone(),
-                version: card.document.version.clone(),
-                manifest_sha256: sha256_file(&card.manifest_path)
-                    .map_err(|error| CliError::new(error.to_string()))?,
-                filesystem_sha256: card.document.filesystem.sha256.clone(),
-            })
-        })
-        .collect::<Result<Vec<_>, CliError>>()?;
-    Ok(DemblyLock {
-        compose_path: plan.deck.compose_path.display().to_string(),
-        service: plan.deck.document.compose.service.clone(),
-        image: plan.image.id.clone(),
-        cards,
-    })
 }
 
 fn validate_runtime_artifacts(plan: &HostPlan, lock_digest: &str) -> Result<(), CliError> {
@@ -200,55 +176,4 @@ fn shell_argument(value: &str) -> String {
         return value.into();
     }
     format!("'{}'", value.replace('\'', "'\\\"'\\\"'"))
-}
-
-fn canonical_lock_digest(lock: &DemblyLock) -> Result<String, CliError> {
-    let mut content = b"dembly-lock-v1\0".to_vec();
-    for value in [&lock.compose_path, &lock.service, &lock.image] {
-        append_canonical_field(&mut content, value);
-    }
-    for card in &lock.cards {
-        for value in [
-            &card.name,
-            &card.version,
-            &card.manifest_sha256,
-            &card.filesystem_sha256,
-        ] {
-            append_canonical_field(&mut content, value);
-        }
-    }
-    let mut command = Command::new("sha256sum")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|error| CliError::new(format!("cannot calculate Lock digest: {error}")))?;
-    command
-        .stdin
-        .as_mut()
-        .ok_or_else(|| CliError::new("cannot open Lock digest input"))?
-        .write_all(&content)
-        .map_err(|error| CliError::new(format!("cannot calculate Lock digest: {error}")))?;
-    let output = command
-        .wait_with_output()
-        .map_err(|error| CliError::new(format!("cannot calculate Lock digest: {error}")))?;
-    if !output.status.success() {
-        return Err(CliError::new(format!(
-            "Lock digest command failed: {}",
-            output.status
-        )));
-    }
-    let digest = String::from_utf8(output.stdout)
-        .map_err(|_| CliError::new("Lock digest command emitted non-UTF-8 output"))?
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| CliError::new("Lock digest command emitted no digest"))?
-        .to_owned();
-    Ok(format!("sha256:{digest}"))
-}
-
-fn append_canonical_field(content: &mut Vec<u8>, value: &str) {
-    content.extend_from_slice(value.len().to_string().as_bytes());
-    content.push(b':');
-    content.extend_from_slice(value.as_bytes());
-    content.push(0);
 }

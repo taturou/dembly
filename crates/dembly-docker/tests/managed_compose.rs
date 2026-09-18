@@ -79,6 +79,20 @@ fn set_lock_preserves_explicit_null_state() {
 }
 
 #[test]
+fn set_lock_preserves_existing_state_and_service_values_semantically() {
+    let fixture = Fixture::new("set-lock-state", COMPOSE);
+    let mut compose = ManagedCompose::read(&fixture.path).unwrap();
+    compose.apply("dev", desired(), "sha256:existing").unwrap();
+    let state_before = compose.state().unwrap();
+    let service_before = compose.service("dev").unwrap();
+
+    compose.set_lock(example_lock()).unwrap();
+
+    assert_eq!(compose.state().unwrap(), state_before);
+    assert_eq!(compose.service("dev").unwrap(), service_before);
+}
+
+#[test]
 fn first_apply_records_exact_values_and_preserves_other_services_and_entries() {
     let fixture = Fixture::new("first-apply", COMPOSE);
     let mut compose = ManagedCompose::read(&fixture.path).unwrap();
