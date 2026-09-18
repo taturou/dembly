@@ -15,4 +15,5 @@ dembly-card = { path = "../dembly-card" }
 dembly-core = { path = "../dembly-core" }
 dembly-docker = { path = "../dembly-docker" }
 dembly-runtime = { path = "../dembly-runtime" }
+serde_yaml.workspace = true
 toml.workspace = true

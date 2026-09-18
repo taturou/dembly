@@ -26,18 +26,25 @@ pub fn run(
         input,
         output,
     )?;
-    let (compose_path, service, devcontainer_path) = match devcontainer {
+    let (compose_path, service, devcontainer_path, compose_files) = match devcontainer {
         Some(selection) => (
             selection.compose_path,
             selection.service,
             Some(selection.path),
+            selection.compose_files,
         ),
-        None => (
-            required_answer(input, output, "Compose path")?,
-            required_answer(input, output, "Compose service")?,
-            None,
-        ),
+        None => {
+            let input_path = required_answer(input, output, "Compose path")?;
+            let compose_file = compose_path_from_input(&context.cwd, &input_path);
+            (
+                relative_path(config_parent, &compose_file)?,
+                required_answer(input, output, "Compose service")?,
+                None,
+                vec![compose_file],
+            )
+        }
     };
+    validate_compose_service(&compose_files, &service)?;
     let card_paths = cards
         .iter()
         .map(|candidate| relative_path(config_parent, &context.cwd.join(&candidate.path)))
@@ -91,6 +98,7 @@ struct DevcontainerSelection {
     path: String,
     compose_path: String,
     service: String,
+    compose_files: Vec<PathBuf>,
 }
 
 fn select_cards(
@@ -207,12 +215,62 @@ fn select_devcontainer(
     if !confirmation(input, output, "Adopt Dev Containers configuration")? {
         return Ok(None);
     }
-    let compose_file = absolute.parent().unwrap_or(&context.cwd).join(last_compose);
+    let compose_parent = absolute.parent().unwrap_or(&context.cwd);
+    let compose_files = document
+        .docker_compose_file
+        .iter()
+        .map(|compose| compose_parent.join(compose))
+        .collect::<Vec<_>>();
+    let compose_file = compose_parent.join(last_compose);
     Ok(Some(DevcontainerSelection {
         path: relative_path(config_parent, &absolute)?,
         compose_path: relative_path(config_parent, &compose_file)?,
         service: document.service,
+        compose_files,
     }))
+}
+
+fn compose_path_from_input(cwd: &Path, input: &str) -> PathBuf {
+    let path = Path::new(input);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
+}
+
+fn validate_compose_service(compose_files: &[PathBuf], service: &str) -> Result<(), CliError> {
+    let mut found = false;
+    for path in compose_files {
+        let source = fs::read_to_string(path).map_err(|error| {
+            CliError::new(format!(
+                "cannot read Compose file {}: {error}",
+                path.display()
+            ))
+        })?;
+        let document = serde_yaml::from_str::<serde_yaml::Value>(&source).map_err(|error| {
+            CliError::new(format!(
+                "cannot parse Compose file {}: {error}",
+                path.display()
+            ))
+        })?;
+        found |= document
+            .as_mapping()
+            .and_then(|root| root.get(serde_yaml::Value::String("services".into())))
+            .and_then(serde_yaml::Value::as_mapping)
+            .is_some_and(|services| {
+                services
+                    .keys()
+                    .any(|name| name.as_str().is_some_and(|name| name == service))
+            });
+    }
+    if found {
+        Ok(())
+    } else {
+        Err(CliError::new(format!(
+            "Compose files have no service {service}"
+        )))
+    }
 }
 
 fn selected_indices(value: &str, limit: usize, label: &str) -> Result<Vec<usize>, CliError> {

@@ -86,3 +86,69 @@ git diff --check: exit 0
 
 - `validate`、`lock`、`apply`、`unapply`、`inspect`、`check` は parser が受理しますが、実装は後続 Task のため現時点では typed "command is not implemented yet" error (exit 2) です。
 - Task 1 が旧 Core API を削除済みのため、コンパイル不能な旧 lifecycle helper 群を `main.rs` から除去しました。旧 helper を保持するという計画上の順序とは整合しませんが、旧 Core interface を復活させず新 shell を build 可能にするために必要でした。
+
+## Fix round 1/5
+
+### 原因と修正
+
+- 手動入力したCompose pathは文字列のままconfigへ書き込まれ、cwdを基準とする入力規約とconfig parentを基準とするConfigDocumentの解釈がずれていました。
+- `init`にはCompose file/serviceを生成前に検証する経路がなく、手動入力とDev Containers選択のどちらでも無効な設定を作成できました。
+- 手動入力はcwd基準でabsolute pathへ解決し、config parentからの相対pathへ変換してから書き込みます。
+- Dev Containers選択は`dockerComposeFile`全順序のYAMLを読み、いずれかの`services` mappingに選択serviceが存在することを検証します。Docker CLIや後続Task 5のCompose config pipelineは呼びません。
+- すべてのCompose path/service検証はconfig親directory作成と`create_new`より前に実行します。
+
+### RED
+
+実行コマンド:
+
+```bash
+CARGO_HOME=/home/f-shigemitsu/.cargo \
+RUSTC=/home/f-shigemitsu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc \
+RUSTDOC=/home/f-shigemitsu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustdoc \
+/home/f-shigemitsu/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo \
+test --offline -p dembly-cli --test init
+```
+
+結果:
+
+```text
+10 tests 中 4 failed:
+- default/custom config は cwd の compose.yaml ではなくconfig parent配下を参照した
+- 手動入力の存在しないCompose fileが exit 0 でconfigを生成した
+- Dev Containersの存在しないCompose fileが exit 0 でconfigを生成した
+```
+
+### GREEN
+
+実行コマンド:
+
+```bash
+CARGO_HOME=/home/f-shigemitsu/.cargo \
+RUSTC=/home/f-shigemitsu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc \
+RUSTDOC=/home/f-shigemitsu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustdoc \
+/home/f-shigemitsu/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo \
+test --offline -p dembly-cli --test init
+
+CARGO_HOME=/home/f-shigemitsu/.cargo \
+RUSTC=/home/f-shigemitsu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc \
+RUSTDOC=/home/f-shigemitsu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustdoc \
+/home/f-shigemitsu/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo \
+test --offline -p dembly-cli --test help
+
+cargo fmt --all -- --check
++git diff --check
+```
+
+結果:
+
+```text
+init: 10 passed; 0 failed
+help: 5 passed; 0 failed
+cargo fmt --check: exit 0
+git diff --check: exit 0
+```
+
+### 追加coverage
+
+- default/custom `--config`の両方について、生成configを`resolve_deck`へ渡し、cwd上のCompose fileへ解決されることを確認しました。
+- 手動入力とDev Containers選択の双方で、存在しないCompose fileと存在しないserviceがconfig未作成のままexit 2となることを確認しました。
