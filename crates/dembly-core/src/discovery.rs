@@ -91,7 +91,7 @@ pub fn discover_init_candidates(cwd: &Path) -> Result<InitCandidates, CoreError>
     }
 
     cards.sort_by(|left, right| display_sort_key(&left.path).cmp(&display_sort_key(&right.path)));
-    devcontainers.sort_by_key(display_sort_key);
+    devcontainers.sort_by_key(|path| display_sort_key(path));
     Ok(InitCandidates {
         cards,
         devcontainers,

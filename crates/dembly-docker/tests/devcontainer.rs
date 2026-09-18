@@ -133,6 +133,19 @@ fn validates_devcontainer_against_the_managed_compose_contract() {
     let document = load_devcontainer(&devcontainer).unwrap();
     assert!(validate_devcontainer(&document, &devcontainer, &managed, "dev", "vscode").is_err());
 
+    write(&base, "{x-dembly: {}}\n");
+    let document = load_devcontainer(&devcontainer).unwrap();
+    assert!(validate_devcontainer(&document, &devcontainer, &managed, "dev", "vscode").is_err());
+
+    write(
+        &base,
+        "services:\n  dev:\n    x-dembly: {}\n# x-dembly: {}\n",
+    );
+    assert_eq!(
+        validate_devcontainer(&document, &devcontainer, &managed, "dev", "vscode").unwrap(),
+        [base.clone(), managed.clone()]
+    );
+
     write(
         &devcontainer,
         r#"{"dockerComposeFile":"../compose.yaml","service":"dev"}"#,

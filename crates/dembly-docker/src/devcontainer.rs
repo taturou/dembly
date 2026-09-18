@@ -174,7 +174,12 @@ pub fn validate_devcontainer(
     {
         let source = fs::read_to_string(compose)
             .map_err(|error| format!("cannot read Compose file {}: {error}", compose.display()))?;
-        if has_top_level_x_dembly(&source) {
+        if has_top_level_x_dembly(&source).map_err(|error| {
+            format!(
+                "cannot parse non-managed Compose file {}: {error}",
+                compose.display()
+            )
+        })? {
             return Err(format!(
                 "non-managed Compose file {} must not contain x-dembly",
                 compose.display()
@@ -201,18 +206,11 @@ fn normalize_path(path: &Path) -> PathBuf {
     normalized
 }
 
-fn has_top_level_x_dembly(source: &str) -> bool {
-    source.lines().any(|line| {
-        let without_comment = line.split_once('#').map_or(line, |(before, _)| before);
-        without_comment.len() == without_comment.trim_start().len()
-            && ["x-dembly:", "'x-dembly':", "\"x-dembly\":"]
-                .iter()
-                .filter_map(|key| without_comment.trim_end().strip_prefix(key))
-                .any(|value| {
-                    value.is_empty()
-                        || value.chars().next().is_some_and(|character| {
-                            character.is_whitespace() || matches!(character, '{' | '[')
-                        })
-                })
-    })
+fn has_top_level_x_dembly(source: &str) -> Result<bool, serde_yaml::Error> {
+    let document: serde_yaml::Value = serde_yaml::from_str(source)?;
+    Ok(document.as_mapping().is_some_and(|mapping| {
+        mapping
+            .keys()
+            .any(|key| key.as_str().is_some_and(|key| key == "x-dembly"))
+    }))
 }
