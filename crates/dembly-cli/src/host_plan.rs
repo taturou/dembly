@@ -4,8 +4,9 @@ use dembly_core::{
     ResolvedDeck,
 };
 use dembly_docker::{
-    inspect_compose, inspect_image, load_devcontainer, validate_devcontainer, ApplyState,
-    DevContainerDocument, EffectiveService, FieldState, ImageConfig, ManagedCompose, ManagedValue,
+    inspect_compose, inspect_image, load_devcontainer, resolve_static_service_image,
+    validate_devcontainer, ApplyState, DevContainerDocument, EffectiveService, FieldState,
+    ImageConfig, ManagedCompose, ManagedValue,
 };
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -59,7 +60,8 @@ impl CheckHostPlan {
             files: compose_files,
             ..
         } = resolve_static_compose_files(&deck, service)?;
-        let static_image = resolve_static_compose_image(&compose_files, service)?;
+        let static_image =
+            resolve_static_service_image(&compose_files, service).map_err(docker_error)?;
         Ok(Self {
             deck,
             managed_compose,
@@ -96,7 +98,8 @@ impl HostPlan {
             devcontainer,
             files: compose_files,
         } = resolve_static_compose_files(&deck, service_name)?;
-        let static_image = resolve_static_compose_image(&compose_files, service_name)?;
+        let static_image =
+            resolve_static_service_image(&compose_files, service_name).map_err(docker_error)?;
 
         let mut effective_service =
             inspect_compose(&compose_files, service_name).map_err(docker_error)?;
@@ -183,55 +186,6 @@ fn resolve_static_compose_files(
             files: vec![deck.compose_path.clone()],
         }),
     }
-}
-
-fn resolve_static_compose_image(files: &[PathBuf], service: &str) -> Result<String, CliError> {
-    let services_key = serde_yaml::Value::String("services".into());
-    let service_key = serde_yaml::Value::String(service.into());
-    let image_key = serde_yaml::Value::String("image".into());
-    let mut image = None;
-    for path in files {
-        let bytes = std::fs::read(path).map_err(|error| {
-            CliError::new(format!(
-                "cannot read Compose file {}: {error}",
-                path.display()
-            ))
-        })?;
-        let document: serde_yaml::Value = serde_yaml::from_slice(&bytes).map_err(|error| {
-            CliError::new(format!(
-                "cannot parse Compose file {}: {error}",
-                path.display()
-            ))
-        })?;
-        let Some(service_value) = document
-            .as_mapping()
-            .and_then(|root| root.get(&services_key))
-            .and_then(serde_yaml::Value::as_mapping)
-            .and_then(|services| services.get(&service_key))
-        else {
-            continue;
-        };
-        let service_mapping = service_value.as_mapping().ok_or_else(|| {
-            CliError::new(format!(
-                "Compose service {service} in {} must be a mapping",
-                path.display()
-            ))
-        })?;
-        if let Some(value) = service_mapping.get(&image_key) {
-            let value = value.as_str().ok_or_else(|| {
-                CliError::new(format!(
-                    "Compose service {service} image in {} must be a string",
-                    path.display()
-                ))
-            })?;
-            image = Some(value.to_owned());
-        }
-    }
-    image.ok_or_else(|| {
-        CliError::new(format!(
-            "Compose service {service} has no statically declared image"
-        ))
-    })
 }
 
 fn inspect_inherited_service(

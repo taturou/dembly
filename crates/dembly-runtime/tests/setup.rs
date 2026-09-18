@@ -132,7 +132,10 @@ fn export_parent_creates_missing_directory_components_without_following_links() 
     }])
     .unwrap();
 
-    assert_eq!(fs::read_link(target).unwrap(), PathBuf::from("/opt/tool/bin/tool"));
+    assert_eq!(
+        fs::read_link(target).unwrap(),
+        PathBuf::from("/opt/tool/bin/tool")
+    );
 }
 
 fn config() -> RuntimeConfig {

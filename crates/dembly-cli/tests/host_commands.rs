@@ -175,7 +175,12 @@ fn check_rejects_a_managed_compose_image_changed_after_apply() {
     let digest = fixture.current_lock_digest();
     fixture.write_applied_state(&digest);
     fixture.write_runtime_artifacts(&digest);
-    fixture.replace_compose("example/dev:latest", "example/dev:changed");
+    let source = fs::read_to_string(&fixture.compose).unwrap();
+    fs::write(
+        &fixture.compose,
+        source.replace("example/dev:latest", "example/dev:changed"),
+    )
+    .unwrap();
 
     let output = fixture.run(["check"]);
 
@@ -201,6 +206,96 @@ fn check_rejects_an_inherited_compose_image_changed_after_apply() {
     let output = fixture.run(["check"]);
 
     assert_failure(&output, "Dembly Lock is stale");
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
+fn check_resolves_recursive_extends_and_rejects_an_extended_image_change_without_docker() {
+    let fixture = Fixture::new();
+    let extended = fixture.enable_recursive_extends_image();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
+
+    let current = fixture.run(["check"]);
+
+    assert_success(&current);
+    let source = fs::read_to_string(&extended).unwrap();
+    fs::write(
+        &extended,
+        source.replace("example/dev:latest", "example/dev:changed"),
+    )
+    .unwrap();
+
+    let stale = fixture.run(["check"]);
+
+    assert_failure(&stale, "Dembly Lock is stale");
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
+fn check_resolves_a_yaml_merge_and_rejects_its_image_change_without_docker() {
+    let fixture = Fixture::new();
+    fixture.enable_yaml_merge_image();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
+
+    let current = fixture.run(["check"]);
+
+    assert_success(&current);
+    let source = fs::read_to_string(&fixture.compose).unwrap();
+    fs::write(
+        &fixture.compose,
+        source.replace("example/dev:latest", "example/dev:changed"),
+    )
+    .unwrap();
+
+    let stale = fixture.run(["check"]);
+
+    assert_failure(&stale, "Dembly Lock is stale");
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
+fn check_interpolates_project_dotenv_and_rejects_a_tag_change_without_docker() {
+    let fixture = Fixture::new();
+    fixture.enable_interpolated_image();
+    fs::write(fixture.project.join(".env"), "TAG=latest\n").unwrap();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
+
+    let current = fixture.run(["check"]);
+
+    assert_success(&current);
+    fs::write(fixture.project.join(".env"), "TAG=changed\n").unwrap();
+
+    let stale = fixture.run(["check"]);
+
+    assert_failure(&stale, "Dembly Lock is stale");
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
+fn check_interpolation_prefers_process_environment_over_project_dotenv() {
+    let fixture = Fixture::new();
+    fixture.enable_interpolated_image();
+    fs::write(fixture.project.join(".env"), "TAG=from-dotenv\n").unwrap();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state_for_image(&digest, "example/dev:from-process");
+    fixture.write_runtime_artifacts(&digest);
+
+    let current = fixture.run_with_tag(["check"], Some("from-process"));
+
+    assert_success(&current);
+    let stale = fixture.run_with_tag(["check"], Some("changed-process"));
+
+    assert_failure(&stale, "Dembly Lock is stale");
     assert_eq!(fixture.docker_log(), "");
 }
 
@@ -449,9 +544,14 @@ impl Fixture {
     }
 
     fn run<const N: usize>(&self, arguments: [&str; N]) -> Output {
+        self.run_with_tag(arguments, None)
+    }
+
+    fn run_with_tag<const N: usize>(&self, arguments: [&str; N], tag: Option<&str>) -> Output {
         let mut paths = vec![self.bin.clone()];
         paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
-        Command::new(env!("CARGO_BIN_EXE_dembly"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_dembly"));
+        command
             .current_dir(&self.project)
             .args(arguments)
             .env("PATH", std::env::join_paths(paths).unwrap())
@@ -459,8 +559,11 @@ impl Fixture {
             .env("DEMBLY_DOCKER_LOG", &self.docker_log)
             .env("DEMBLY_COMPOSE_JSON", &self.compose_json)
             .env("DEMBLY_IMAGE_JSON", &self.image_json)
-            .output()
-            .expect("dembly should start")
+            .env_remove("TAG");
+        if let Some(tag) = tag {
+            command.env("TAG", tag);
+        }
+        command.output().expect("dembly should start")
     }
 
     fn add_optional_missing_bind(&self) {
@@ -504,6 +607,33 @@ impl Fixture {
         base
     }
 
+    fn enable_recursive_extends_image(&self) -> PathBuf {
+        fs::write(
+            &self.compose,
+            "name: fixture\nservices:\n  dev:\n    extends:\n      file: compose.extended.yaml\n      service: intermediate\n    user: vscode:staff\n",
+        )
+        .unwrap();
+        let extended = self.project.join("compose.extended.yaml");
+        fs::write(
+            &extended,
+            "services:\n  base:\n    image: example/dev:latest\n  intermediate:\n    extends:\n      service: base\n",
+        )
+        .unwrap();
+        extended
+    }
+
+    fn enable_yaml_merge_image(&self) {
+        fs::write(
+            &self.compose,
+            "name: fixture\nx-image: &image\n  image: example/dev:latest\nservices:\n  dev:\n    <<: *image\n    user: vscode:staff\n",
+        )
+        .unwrap();
+    }
+
+    fn enable_interpolated_image(&self) {
+        self.replace_compose("example/dev:latest", "example/dev:${TAG}");
+    }
+
     fn write_lock(&self, stale: bool) {
         let mut compose = ManagedCompose::read(&self.compose).unwrap();
         compose
@@ -533,6 +663,10 @@ impl Fixture {
     }
 
     fn write_applied_state(&self, lock_digest: &str) {
+        self.write_applied_state_for_image(lock_digest, "example/dev:latest");
+    }
+
+    fn write_applied_state_for_image(&self, lock_digest: &str, image: &str) {
         let (runtime_bytes, binary_bytes) = self.runtime_artifact_contents(lock_digest);
         let mut compose = ManagedCompose::read(&self.compose).unwrap();
         compose
@@ -550,10 +684,7 @@ impl Fixture {
                         ),
                         (
                             "io.dembly.image-reference-digest".into(),
-                            Value::String(format!(
-                                "sha256:{}",
-                                sha256_bytes(b"example/dev:latest")
-                            )),
+                            Value::String(format!("sha256:{}", sha256_bytes(image.as_bytes()))),
                         ),
                         (
                             "io.dembly.runtime-plan-digest".into(),

@@ -5,6 +5,7 @@ mod client;
 mod compose_config;
 mod devcontainer;
 mod managed_compose;
+mod static_compose;
 
 pub use atomic_write::{atomic_create, atomic_replace, prepare_atomic_replace, AtomicReplacement};
 
@@ -19,3 +20,4 @@ pub use managed_compose::{
     ManagedCompose, ManagedFields, ManagedMount, ManagedMountState, ManagedValue, MountState,
     ServiceSnapshot,
 };
+pub use static_compose::resolve_static_service_image;
