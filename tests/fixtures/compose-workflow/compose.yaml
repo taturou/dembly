@@ -1,0 +1,19 @@
+name: __PROJECT_NAME__
+services:
+  dev:
+    image: __IMAGE_NAME__
+    environment:
+      COMPOSE_ENV: retained
+    volumes:
+      - ./workspace:/workspace:rw
+    stop_grace_period: 1s
+  sidecar:
+    image: alpine:3.21
+    command: ["sleep", "infinity"]
+    environment:
+      SIDECAR_ENV: retained
+    labels:
+      fixture.sidecar: retained
+    volumes:
+      - ./sidecar-data:/sidecar:ro
+    stop_grace_period: 1s

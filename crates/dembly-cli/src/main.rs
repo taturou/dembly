@@ -32,7 +32,7 @@ fn main() -> ExitCode {
         return match dembly_cli::runtime::run_runtime_command(&arguments[1..], &mut system) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("dembly runtime: {error}");
+                eprintln!("dembly __runtime: {error}");
                 ExitCode::from(2)
             }
         };

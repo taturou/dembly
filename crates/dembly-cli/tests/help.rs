@@ -41,7 +41,7 @@ fn public_help_lists_host_commands_without_legacy_lifecycle_commands() {
 #[test]
 fn config_commands_reject_legacy_and_malformed_arguments() {
     for arguments in [
-        vec!["validate", "deck.toml"],
+        vec!["validate", "unexpected.toml"],
         vec!["validate", "--config", "one.toml", "--config", "two.toml"],
         vec!["lock", "--unknown"],
         vec!["apply", "--config"],
