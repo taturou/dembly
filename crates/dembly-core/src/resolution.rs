@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 pub struct ResolvedDeck {
     pub path: PathBuf,
     pub root: PathBuf,
+    pub compose_path: PathBuf,
     pub document: ConfigDocument,
     pub cards: Vec<ResolvedCard>,
     pub volumes: Vec<ResolvedVolume>,
@@ -56,6 +57,7 @@ pub fn resolve_deck(
     if deck.compose.path.is_empty() || deck.compose.service.is_empty() {
         return Err(error("Compose path and service are required"));
     }
+    let compose_path = resolve_compose_path(&root, &deck.compose.path)?;
     let host = HostVariables {
         host_home: variables.host_home.clone(),
         deck_root: root.clone(),
@@ -158,6 +160,7 @@ pub fn resolve_deck(
     Ok(ResolvedDeck {
         path,
         root,
+        compose_path,
         document: deck,
         cards,
         volumes,
@@ -256,12 +259,7 @@ fn resolve_volume(
         )));
     }
     let source = resolve_volume_path(root, &owner, &volume.name, volume.shared)?;
-    if source.is_symlink() {
-        return Err(error(format!(
-            "Volume physical path is a symlink: {}",
-            source.display()
-        )));
-    }
+    reject_symlinked_volume_storage(root, &source)?;
     Ok(ResolvedVolume {
         owner,
         name: volume.name.clone(),
@@ -284,7 +282,9 @@ fn resolve_bind(
             bind.mode
         )));
     }
+    reject_parent_traversal(&bind.source, "Host Bind source")?;
     let expanded = expand_bind_source(&bind.source, variables)?;
+    reject_parent_traversal(expanded.as_os_str(), "Host Bind source")?;
     let source = if expanded.is_absolute() {
         expanded
     } else {
@@ -348,6 +348,88 @@ fn resolve_card_path(root: &Path, value: &str) -> Result<PathBuf, CoreError> {
     } else {
         normalize_relative(root, value, "Card manifest path")
     }
+}
+
+fn resolve_compose_path(root: &Path, value: &str) -> Result<PathBuf, CoreError> {
+    let expanded = expand_deck_root(value, root)?;
+    let path = if expanded.is_absolute() {
+        expanded
+    } else {
+        root.join(expanded)
+    };
+    Ok(normalize_path(&path))
+}
+
+fn expand_deck_root(value: &str, root: &Path) -> Result<PathBuf, CoreError> {
+    let mut expanded = String::new();
+    let mut remaining = value;
+    while let Some(start) = remaining.find('$') {
+        expanded.push_str(&remaining[..start]);
+        let suffix = &remaining[start..];
+        let Some(close) = suffix.find('}') else {
+            return Err(error(format!("invalid variable syntax: {value}")));
+        };
+        if !suffix.starts_with("${") {
+            return Err(error(format!("invalid variable syntax: {value}")));
+        }
+        let name = &suffix[2..close];
+        if name != "DECK_ROOT" {
+            return Err(error(format!("undefined Compose variable: {name}")));
+        }
+        expanded.push_str(&root.to_string_lossy());
+        remaining = &suffix[close + 1..];
+    }
+    expanded.push_str(remaining);
+    Ok(PathBuf::from(expanded))
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(Path::new("/")),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(component) => normalized.push(component),
+        }
+    }
+    normalized
+}
+
+fn reject_parent_traversal(
+    value: impl AsRef<std::ffi::OsStr>,
+    label: &str,
+) -> Result<(), CoreError> {
+    if Path::new(value.as_ref())
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
+    {
+        return Err(error(format!("{label} must not contain parent traversal")));
+    }
+    Ok(())
+}
+
+fn reject_symlinked_volume_storage(root: &Path, source: &Path) -> Result<(), CoreError> {
+    let relative = source.strip_prefix(root).map_err(|_| {
+        error(format!(
+            "Volume path escapes Deck root: {}",
+            source.display()
+        ))
+    })?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component);
+        if current.is_symlink() {
+            return Err(error(format!(
+                "Volume physical path is a symlink: {}",
+                current.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn runtime_target_path(value: &str) -> PathBuf {

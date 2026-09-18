@@ -35,7 +35,7 @@ fn bind_source_expands_only_host_variables_and_target_keeps_runtime_variables() 
 }
 
 #[test]
-fn resolved_bind_keeps_its_runtime_target_and_rejects_symlinked_volume_storage() {
+fn resolved_bind_rejects_parent_traversal_in_declared_or_expanded_source() {
     let root = std::env::temp_dir().join(format!("dembly-bind-target-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join(".dembly")).unwrap();
@@ -46,29 +46,126 @@ fn resolved_bind_keeps_its_runtime_target_and_rejects_symlinked_volume_storage()
     )
     .unwrap();
     let config = root.join(".dembly/config.toml");
-    let resolved = resolve_deck(
+    assert!(resolve_deck(&config, &variables_for(&config))
+        .unwrap_err()
+        .to_string()
+        .contains("Host Bind source must not contain parent traversal"));
+
+    fs::write(
+        &config,
+        "schema_version = 1\n[compose]\npath = \"../compose.yaml\"\nservice = \"dev\"\n[[binds]]\nsource = \"${HOST_HOME}/../host-file\"\ntarget = \"${HOME}/.config\"\nmode = \"ro\"\n",
+    )
+    .unwrap();
+    assert!(resolve_deck(
         &config,
         &HostVariables {
-            host_home: PathBuf::from("/home/host"),
+            host_home: root.join("host-home"),
             deck_root: root.join(".dembly"),
         },
     )
-    .unwrap();
-    assert_eq!(resolved.binds[0].target, "${HOME}/.config");
+    .unwrap_err()
+    .to_string()
+    .contains("Host Bind source must not contain parent traversal"));
 
-    fs::create_dir_all(root.join("volume-target")).unwrap();
-    fs::create_dir_all(root.join(".dembly/volumes")).unwrap();
-    std::os::unix::fs::symlink(
-        root.join("volume-target"),
-        root.join(".dembly/volumes/build"),
+    fs::write(
+        &config,
+        "schema_version = 1\n[compose]\npath = \"../compose.yaml\"\nservice = \"dev\"\n[[binds]]\nsource = \"/tmp/dembly/../host-file\"\ntarget = \"${HOME}/.config\"\nmode = \"ro\"\n",
     )
     .unwrap();
+    assert!(resolve_deck(&config, &variables_for(&config))
+        .unwrap_err()
+        .to_string()
+        .contains("Host Bind source must not contain parent traversal"));
+}
+
+#[test]
+fn resolved_bind_keeps_its_runtime_target() {
+    let root =
+        std::env::temp_dir().join(format!("dembly-bind-runtime-target-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join(".dembly")).unwrap();
+    fs::write(root.join(".dembly/host-file"), "host").unwrap();
+    let config = root.join(".dembly/config.toml");
+    fs::write(
+        &config,
+        "schema_version = 1\n[compose]\npath = \"../compose.yaml\"\nservice = \"dev\"\n[[binds]]\nsource = \"${DECK_ROOT}/host-file\"\ntarget = \"${HOME}/.config\"\nmode = \"ro\"\n",
+    )
+    .unwrap();
+    let resolved = resolve_deck(&config, &variables_for(&config)).unwrap();
+    assert_eq!(resolved.binds[0].target, "${HOME}/.config");
+}
+
+#[test]
+fn resolved_volume_rejects_symlinked_storage_components() {
+    let root = std::env::temp_dir().join(format!("dembly-volume-symlinks-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join(".dembly")).unwrap();
+    let config = root.join(".dembly/config.toml");
     fs::write(
         &config,
         "schema_version = 1\n[compose]\npath = \"../compose.yaml\"\nservice = \"dev\"\n[[volumes]]\nname = \"build\"\ntarget = \"/workspace/build\"\n",
     )
     .unwrap();
+
+    fs::create_dir_all(root.join("volume-target")).unwrap();
+    std::os::unix::fs::symlink(root.join("volume-target"), root.join(".dembly/volumes")).unwrap();
     assert!(resolve_deck(&config, &variables_for(&config)).is_err());
+
+    let card_root = root.join("card-intermediate");
+    fs::create_dir_all(card_root.join(".dembly/cards/clang")).unwrap();
+    let card_config = card_root.join(".dembly/config.toml");
+    fs::write(
+        card_root.join(".dembly/cards/clang/card.toml"),
+        "schema_version = 1\nname = \"clang\"\nversion = \"1\"\n[filesystem]\ntype = \"squashfs\"\nfile = \"rootfs.squashfs\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n[mount]\ntarget = \"/opt/clang\"\n[[volumes]]\nname = \"cache\"\ntarget = \"/cache\"\n",
+    )
+    .unwrap();
+    fs::write(
+        &card_config,
+        "schema_version = 1\n[compose]\npath = \"../compose.yaml\"\nservice = \"dev\"\n[[cards]]\npath = \"cards/clang/card.toml\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(card_root.join(".dembly/volumes")).unwrap();
+    fs::create_dir_all(card_root.join("volume-target")).unwrap();
+    assert!(resolve_deck(&card_config, &variables_for(&card_config)).is_ok());
+    std::os::unix::fs::symlink(
+        card_root.join("volume-target"),
+        card_root.join(".dembly/volumes/clang"),
+    )
+    .unwrap();
+    assert!(resolve_deck(&card_config, &variables_for(&card_config)).is_err());
+}
+
+#[test]
+fn resolved_deck_exposes_config_relative_and_deck_root_compose_paths() {
+    let root = std::env::temp_dir().join(format!("dembly-compose-path-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join(".dembly")).unwrap();
+    fs::write(root.join("compose.yaml"), "services: {}\n").unwrap();
+    fs::write(
+        root.join(".dembly/config.toml"),
+        "schema_version = 1\n[compose]\npath = \"../compose.yaml\"\nservice = \"dev\"\n",
+    )
+    .unwrap();
+    let config = root.join(".dembly/config.toml");
+    assert_eq!(
+        resolve_deck(&config, &variables_for(&config))
+            .unwrap()
+            .compose_path,
+        root.join("compose.yaml")
+    );
+
+    fs::write(root.join(".dembly/compose.yaml"), "services: {}\n").unwrap();
+    fs::write(
+        &config,
+        "schema_version = 1\n[compose]\npath = \"${DECK_ROOT}/compose.yaml\"\nservice = \"dev\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        resolve_deck(&config, &variables_for(&config))
+            .unwrap()
+            .compose_path,
+        root.join(".dembly/compose.yaml")
+    );
 }
 
 fn variables_for(config: &std::path::Path) -> HostVariables {
