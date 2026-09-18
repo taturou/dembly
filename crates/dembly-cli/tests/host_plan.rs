@@ -171,6 +171,60 @@ fn applied_state_restores_originals_inherited_from_earlier_compose_files() {
 }
 
 #[test]
+fn applied_state_without_resolvable_prefix_service_falls_back_to_image_defaults() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    let fixture = Fixture::new();
+    let mut compose = ManagedCompose::read(&fixture.managed_compose).unwrap();
+    compose
+        .apply(
+            "dev",
+            ManagedFields {
+                entrypoint: Value::Sequence(vec![Value::String("/run/dembly/bin/dembly".into())]),
+                command: Value::Sequence(Vec::new()),
+                user: Value::String("root".into()),
+                privileged: Value::Bool(true),
+                labels: BTreeMap::new(),
+                mounts: Vec::new(),
+            },
+            "sha256:applied",
+        )
+        .unwrap();
+    fs::write(&fixture.managed_compose, compose.to_bytes().unwrap()).unwrap();
+    fixture.write_compose_json(
+        r#"{"services":{"dev":{"image":"example/dev:latest","entrypoint":["/run/dembly/bin/dembly"],"command":[],"user":"root","environment":{}}}}"#,
+    );
+    fixture.write_devcontainer(
+        "dev",
+        &["../compose.base.yaml", "../compose.yaml"],
+        "image-user",
+    );
+
+    for prefix in [
+        r#"{"services":{"database":{"image":"postgres:17"}}}"#,
+        r#"{"services":{"dev":{"user":"prefix-user"}}}"#,
+    ] {
+        fixture.clear_log();
+        fixture.write_base_compose_json(prefix);
+
+        let plan = fixture.resolve().unwrap();
+
+        assert_eq!(plan.intended_user_spec(), "image-user");
+        assert_eq!(plan.effective_service.entrypoint, None);
+        assert_eq!(plan.effective_service.command, None);
+        assert_eq!(plan.effective_service.user, None);
+        assert_eq!(
+            fixture.log(),
+            format!(
+                "compose\n-f\n{}\n-f\n{}\nconfig\n--format\njson\ncompose\n-f\n{}\nconfig\n--format\njson\nimage\ninspect\nexample/dev:latest\n",
+                fixture.base_compose.display(),
+                fixture.managed_compose.display(),
+                fixture.base_compose.display()
+            )
+        );
+    }
+}
+
+#[test]
 fn rejects_devcontainer_cross_file_mismatches() {
     let _environment = ENVIRONMENT.lock().unwrap();
 

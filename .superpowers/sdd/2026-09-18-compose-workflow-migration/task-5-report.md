@@ -42,7 +42,7 @@ cargo test -p dembly-docker
 22 passed; 0 failed
 
 cargo test -p dembly-cli --test host_plan
-6 passed; 0 failed
+7 passed; 0 failed
 
 cargo test -p dembly-cli --no-run
 all CLI test targets compiled
@@ -123,3 +123,40 @@ cargo test -p dembly-cli --test init
 ```
 
 applied state の fake Docker test は full Compose、必要な場合だけ前段 prefix、image inspect の argv を順序込みで検証しています。
+
+## Fix round 2/5
+
+### 原因
+
+Fix round 1 は `original: missing` の継承元を得るため、管理対象 Compose を除いた prefix に対して `inspect_compose` を実行しました。
+
+しかし、最終ファイルで対象 service または image が初めて定義される有効な Compose 列では、prefix 単体から完全な `EffectiveService` を構築できません。
+
+この場合も prefix inspect のエラーを HostPlan 全体のエラーとして返していました。
+
+### 修正
+
+- prefix に対象 service がない場合は継承値なしとして扱います。
+- prefix の対象 service に有効な image がまだない場合も継承値なしとして扱います。
+- 継承値なしでは entrypoint、command、user を未指定へ戻し、image の既定値へフォールバックします。
+- prefix に完全な対象 service がある場合は、Fix round 1 の継承処理を維持します。
+- Docker 外部呼び出しは `compose config` と `image inspect` に限定したままです。
+
+### RED
+
+```text
+cargo test -p dembly-cli --test host_plan applied_state_without_resolvable_prefix_service_falls_back_to_image_defaults -- --exact
+FAILED: Compose config has no service dev
+```
+
+回帰テストは、prefix に対象 service がない場合と、対象 service はあるが image が未確定の場合を検査します。
+
+### GREEN
+
+```text
+cargo test -p dembly-cli --test host_plan applied_state_without_resolvable_prefix_service_falls_back_to_image_defaults -- --exact
+1 passed; 0 failed
+
+cargo test -p dembly-cli --test host_plan
+7 passed; 0 failed
+```

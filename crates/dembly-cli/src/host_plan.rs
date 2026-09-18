@@ -67,10 +67,7 @@ impl HostPlan {
             inspect_compose(&compose_files, service_name).map_err(docker_error)?;
         if let Some(state) = managed_compose.state().map_err(docker_error)? {
             let inherited_service = if compose_files.len() > 1 && needs_inherited_service(&state) {
-                Some(
-                    inspect_compose(&compose_files[..compose_files.len() - 1], service_name)
-                        .map_err(docker_error)?,
-                )
+                inspect_inherited_service(&compose_files[..compose_files.len() - 1], service_name)?
             } else {
                 None
             };
@@ -119,6 +116,22 @@ impl HostPlan {
 
     pub fn intended_user_spec(&self) -> &str {
         select_intended_user(&self.effective_service, &self.image)
+    }
+}
+
+fn inspect_inherited_service(
+    files: &[PathBuf],
+    service: &str,
+) -> Result<Option<EffectiveService>, CliError> {
+    match inspect_compose(files, service) {
+        Ok(service) => Ok(Some(service)),
+        Err(error)
+            if error == format!("Compose config has no service {service}")
+                || error == format!("Compose service {service} has no effective image") =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(docker_error(error)),
     }
 }
 
