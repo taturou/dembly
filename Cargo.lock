@@ -38,6 +38,10 @@ dependencies = [
 [[package]]
 name = "dembly-runtime"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
 
 [[package]]
 name = "equivalent"

@@ -1,7 +1,7 @@
-use crate::{RuntimeExport, RuntimeHook};
+use crate::{ResolvedRuntimeUser, RuntimeConfig, RuntimeExport, RuntimeHook};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn create_exports(exports: &[RuntimeExport]) -> Result<(), String> {
@@ -62,15 +62,59 @@ pub fn run_hooks(
             .status()
             .map_err(|error| {
                 format!(
-                    "cannot execute post_mount hook {}: {error}",
-                    hook.exec.display()
+                    "cannot execute post_mount hook {} for Card {}: {error}",
+                    hook.exec.display(),
+                    hook.card
                 )
             })?;
         if !status.success() {
             return Err(format!(
-                "post_mount hook {} failed with status {status}",
-                hook.exec.display()
+                "post_mount hook {} for Card {} failed with status {status}",
+                hook.exec.display(),
+                hook.card
             ));
+        }
+    }
+    Ok(())
+}
+
+pub fn run_checks(config: &RuntimeConfig, user: &ResolvedRuntimeUser) -> Result<(), String> {
+    for check in &config.checks {
+        if !config.cards.iter().any(|card| card.name == check.card) {
+            return Err(format!("check references unknown Card: {}", check.card));
+        }
+    }
+
+    let mut environment = config.environment.clone();
+    environment
+        .entry("HOME".into())
+        .or_insert_with(|| user.home.clone());
+    environment
+        .entry("USER".into())
+        .or_insert_with(|| user.name.clone());
+
+    for card in &config.cards {
+        for check in config.checks.iter().filter(|check| check.card == card.name) {
+            let status = Command::new(&check.exec)
+                .args(&check.args)
+                .current_dir(&card.mount_target)
+                .env_clear()
+                .envs(&environment)
+                .status()
+                .map_err(|error| {
+                    format!(
+                        "cannot execute check {} for Card {}: {error}",
+                        check.exec.display(),
+                        check.card
+                    )
+                })?;
+            if !status.success() {
+                return Err(format!(
+                    "check {} for Card {} failed with status {status}",
+                    check.exec.display(),
+                    check.card
+                ));
+            }
         }
     }
     Ok(())
@@ -78,10 +122,22 @@ pub fn run_hooks(
 
 pub fn ensure_mount_targets_exist(cards: &[crate::RuntimeCard]) -> Result<(), String> {
     for card in cards {
-        if !Path::new(&card.mount_target).is_dir() {
+        if !card.mount_target.is_dir() {
             return Err(format!(
                 "Card mount target does not exist after mount: {}",
                 card.mount_target.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn ensure_volume_targets_exist(targets: &[PathBuf]) -> Result<(), String> {
+    for (index, target) in targets.iter().enumerate() {
+        if !Path::new(target).is_dir() {
+            return Err(format!(
+                "Compose Volume {index} target is not present as a directory: {}",
+                target.display()
             ));
         }
     }
