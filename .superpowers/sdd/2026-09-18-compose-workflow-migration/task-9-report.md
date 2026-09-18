@@ -53,3 +53,19 @@ RED:
 GREEN:
 
 - `cargo test -p dembly-cli --test apply --test unapply`: 10件成功。
+
+## Review round 2
+
+- mtime の `<=` 比較による順序テストを削除した。
+- Runtime plan、Runtime binary、executable permission、Volume、`.gitignore`、Compose の対象書込みを一つの sequencer に集約した。
+- production の native writer と test の recording writer が同じ sequencer を通る構造にした。
+- recording writer が記録した実イベント列を完全一致で検証し、Compose replace が必ず最後であることを固定した。
+
+RED:
+
+- Compose replace を意図的に先頭へ移した mutation で、recording writer の先頭イベントが Compose となりテストが失敗した。
+
+GREEN:
+
+- `cargo test -p dembly-cli --lib artifacts::tests::apply_replaces_artifacts_in_runtime_binary_volume_ignore_compose_order -- --exact`: 1件成功。
+- `cargo test -p dembly-cli --test apply`: 6件成功。

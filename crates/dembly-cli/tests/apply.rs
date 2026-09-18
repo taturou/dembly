@@ -208,38 +208,6 @@ fn apply_appends_only_missing_ignore_rules_without_reordering_existing_lines() {
     );
 }
 
-#[test]
-fn apply_replaces_artifacts_in_runtime_binary_volume_ignore_compose_order() {
-    let fixture = Fixture::new();
-    fixture.lock();
-
-    assert_success(&fixture.run("apply"));
-
-    let modified = [
-        fs::metadata(fixture.deck_root.join("runtime/dev.toml"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        fs::metadata(fixture.deck_root.join("runtime/bin/dembly"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        fs::metadata(fixture.deck_root.join("volumes/cache"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        fs::metadata(fixture.project.join(".gitignore"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        fs::metadata(&fixture.compose).unwrap().modified().unwrap(),
-    ];
-    assert!(
-        modified.windows(2).all(|pair| pair[0] <= pair[1]),
-        "replacement mtimes were not ordered: {modified:?}"
-    );
-}
-
 #[derive(Debug, Eq, PartialEq)]
 struct ArtifactSnapshot {
     files: BTreeMap<PathBuf, (Vec<u8>, SystemTime)>,

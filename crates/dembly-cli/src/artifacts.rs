@@ -235,7 +235,7 @@ impl ApplyArtifacts {
         &self.runtime_path
     }
 
-    pub fn write(self) -> Result<(), CliError> {
+    pub fn write(self, compose_path: &Path, compose_bytes: &[u8]) -> Result<(), CliError> {
         let runtime_root = self
             .runtime_path
             .parent()
@@ -247,28 +247,65 @@ impl ApplyArtifacts {
                 .parent()
                 .expect("Runtime binary always has a parent"),
         )?;
-        atomic_replace(&self.runtime_path, &self.runtime_bytes).map_err(CliError::new)?;
-        atomic_replace(&self.binary_path, &self.binary_bytes).map_err(CliError::new)?;
-        let mut permissions = fs::metadata(&self.binary_path)
+        let mut writer = NativeApplyWriter {
+            deck_root: &self.deck_root,
+        };
+        write_apply_targets(&self, compose_path, compose_bytes, &mut writer)
+    }
+}
+
+trait ApplyWriter {
+    fn replace(&mut self, path: &Path, bytes: &[u8]) -> Result<(), CliError>;
+    fn make_executable(&mut self, path: &Path) -> Result<(), CliError>;
+    fn create_volume_directory(&mut self, path: &Path) -> Result<(), CliError>;
+}
+
+struct NativeApplyWriter<'a> {
+    deck_root: &'a Path,
+}
+
+impl ApplyWriter for NativeApplyWriter<'_> {
+    fn replace(&mut self, path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+        atomic_replace(path, bytes).map_err(CliError::new)
+    }
+
+    fn make_executable(&mut self, path: &Path) -> Result<(), CliError> {
+        let mut permissions = fs::metadata(path)
             .map_err(|error| {
                 CliError::new(format!(
                     "cannot inspect Runtime binary {}: {error}",
-                    self.binary_path.display()
+                    path.display()
                 ))
             })?
             .permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(&self.binary_path, permissions).map_err(|error| {
+        fs::set_permissions(path, permissions).map_err(|error| {
             CliError::new(format!(
                 "cannot make Runtime binary {} executable: {error}",
-                self.binary_path.display()
+                path.display()
             ))
-        })?;
-        for directory in &self.volume_directories {
-            create_directory_path(&self.deck_root, directory)?;
-        }
-        atomic_replace(&self.gitignore_path, &self.gitignore_bytes).map_err(CliError::new)
+        })
     }
+
+    fn create_volume_directory(&mut self, path: &Path) -> Result<(), CliError> {
+        create_directory_path(self.deck_root, path)
+    }
+}
+
+fn write_apply_targets(
+    artifacts: &ApplyArtifacts,
+    compose_path: &Path,
+    compose_bytes: &[u8],
+    writer: &mut impl ApplyWriter,
+) -> Result<(), CliError> {
+    writer.replace(&artifacts.runtime_path, &artifacts.runtime_bytes)?;
+    writer.replace(&artifacts.binary_path, &artifacts.binary_bytes)?;
+    writer.make_executable(&artifacts.binary_path)?;
+    for directory in &artifacts.volume_directories {
+        writer.create_volume_directory(directory)?;
+    }
+    writer.replace(&artifacts.gitignore_path, &artifacts.gitignore_bytes)?;
+    writer.replace(compose_path, compose_bytes)
 }
 
 fn managed_mount(source: impl AsRef<Path>, target: &str, mode: &str) -> ManagedMount {
@@ -370,4 +407,79 @@ fn create_directory_path(root: &Path, target: &Path) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{write_apply_targets, ApplyArtifacts, ApplyWriter};
+    use crate::CliError;
+    use std::path::{Path, PathBuf};
+
+    #[derive(Debug, Eq, PartialEq)]
+    enum WriteEvent {
+        Replace(PathBuf),
+        Executable(PathBuf),
+        Volume(PathBuf),
+    }
+
+    #[derive(Default)]
+    struct RecordingWriter {
+        events: Vec<WriteEvent>,
+    }
+
+    impl ApplyWriter for RecordingWriter {
+        fn replace(&mut self, path: &Path, _bytes: &[u8]) -> Result<(), CliError> {
+            self.events.push(WriteEvent::Replace(path.into()));
+            Ok(())
+        }
+
+        fn make_executable(&mut self, path: &Path) -> Result<(), CliError> {
+            self.events.push(WriteEvent::Executable(path.into()));
+            Ok(())
+        }
+
+        fn create_volume_directory(&mut self, path: &Path) -> Result<(), CliError> {
+            self.events.push(WriteEvent::Volume(path.into()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn apply_replaces_artifacts_in_runtime_binary_volume_ignore_compose_order() {
+        let artifacts = ApplyArtifacts {
+            runtime_path: PathBuf::from("/deck/.dembly/runtime/dev.toml"),
+            runtime_bytes: b"runtime".to_vec(),
+            binary_path: PathBuf::from("/deck/.dembly/runtime/bin/dembly"),
+            binary_bytes: b"binary".to_vec(),
+            volume_directories: vec![
+                PathBuf::from("/deck/.dembly/volumes/cache"),
+                PathBuf::from("/deck/.dembly/volumes/tool/private"),
+            ],
+            gitignore_path: PathBuf::from("/deck/.gitignore"),
+            gitignore_bytes: b"ignore".to_vec(),
+            deck_root: PathBuf::from("/deck/.dembly"),
+        };
+        let mut writer = RecordingWriter::default();
+
+        write_apply_targets(
+            &artifacts,
+            Path::new("/deck/compose.yaml"),
+            b"compose",
+            &mut writer,
+        )
+        .unwrap();
+
+        assert_eq!(
+            writer.events,
+            vec![
+                WriteEvent::Replace(PathBuf::from("/deck/.dembly/runtime/dev.toml")),
+                WriteEvent::Replace(PathBuf::from("/deck/.dembly/runtime/bin/dembly")),
+                WriteEvent::Executable(PathBuf::from("/deck/.dembly/runtime/bin/dembly")),
+                WriteEvent::Volume(PathBuf::from("/deck/.dembly/volumes/cache")),
+                WriteEvent::Volume(PathBuf::from("/deck/.dembly/volumes/tool/private")),
+                WriteEvent::Replace(PathBuf::from("/deck/.gitignore")),
+                WriteEvent::Replace(PathBuf::from("/deck/compose.yaml")),
+            ]
+        );
+    }
 }

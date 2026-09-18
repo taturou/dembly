@@ -2,7 +2,6 @@ use crate::commands::lock::resolved_lock;
 use crate::commands::validate::write_warnings;
 use dembly_cli::artifacts::{build_managed_fields, ApplyArtifacts};
 use dembly_cli::{CliError, HostContext, HostPlan};
-use dembly_docker::atomic_replace;
 use std::io::Write;
 
 pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError> {
@@ -26,8 +25,7 @@ pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError
         .map_err(|error| CliError::new(error.to_string()))?;
     let compose_bytes = plan.managed_compose.to_bytes().map_err(CliError::new)?;
 
-    artifacts.write()?;
-    atomic_replace(&plan.deck.compose_path, &compose_bytes).map_err(CliError::new)?;
+    artifacts.write(&plan.deck.compose_path, &compose_bytes)?;
 
     writeln!(output, "applied: {}", plan.deck.compose_path.display())
         .and_then(|()| writeln!(output, "lock: {lock_digest}"))
