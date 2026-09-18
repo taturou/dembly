@@ -9,7 +9,10 @@ pub fn resolve_static_service_image(files: &[PathBuf], service: &str) -> Result<
         .ok_or_else(|| "Compose file list must not be empty".to_owned())?;
     let project_directory = first.parent().unwrap_or_else(|| Path::new(""));
     let environment = interpolation_environment(project_directory)?;
-    let resolver = StaticComposeResolver { environment };
+    let resolver = StaticComposeResolver {
+        environment,
+        project_directory: normalize_path(project_directory),
+    };
     let mut merged = Mapping::new();
     for file in files {
         if let Some(service_mapping) = resolver.resolve_service(file, service, &mut Vec::new())? {
@@ -29,6 +32,7 @@ pub fn resolve_static_service_image(files: &[PathBuf], service: &str) -> Result<
 
 struct StaticComposeResolver {
     environment: BTreeMap<String, String>,
+    project_directory: PathBuf,
 }
 
 impl StaticComposeResolver {
@@ -60,7 +64,7 @@ impl StaticComposeResolver {
             return Ok(Some(mapping));
         };
 
-        let reference = parse_extends(&extends, &file, service)?;
+        let reference = parse_extends(&extends, &file, &self.project_directory, service)?;
         stack.push(identity);
         let base = self
             .resolve_service(&reference.file, &reference.service, stack)?
@@ -86,6 +90,7 @@ struct ExtendsReference {
 fn parse_extends(
     value: &Value,
     current_file: &Path,
+    project_directory: &Path,
     service: &str,
 ) -> Result<ExtendsReference, String> {
     let (file, referenced_service) = match value {
@@ -121,10 +126,7 @@ fn parse_extends(
     };
     let file = match file {
         Some(file) if Path::new(file).is_absolute() => PathBuf::from(file),
-        Some(file) => current_file
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .join(file),
+        Some(file) => project_directory.join(file),
         None => current_file.to_path_buf(),
     };
     Ok(ExtendsReference {
@@ -189,18 +191,64 @@ fn interpolation_environment(project_directory: &Path) -> Result<BTreeMap<String
     let process_environment = std::env::vars().collect::<BTreeMap<_, _>>();
     let process_keys = process_environment.keys().cloned().collect::<BTreeSet<_>>();
     let mut environment = process_environment;
-    let path = project_directory.join(".env");
-    match fs::read_to_string(&path) {
-        Ok(source) => parse_dotenv(&source, &path, &process_keys, &mut environment)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(format!(
-                "cannot read Compose .env {}: {error}",
-                path.display()
-            ))
+    if let Some(files) = environment
+        .get("COMPOSE_ENV_FILES")
+        .filter(|value| !value.is_empty())
+        .cloned()
+    {
+        let working_directory = std::env::current_dir()
+            .map_err(|error| format!("cannot resolve Compose working directory: {error}"))?;
+        for file in files.split(',') {
+            let file = file.trim();
+            if file.is_empty() {
+                return Err("COMPOSE_ENV_FILES contains an empty path".into());
+            }
+            let path = Path::new(file);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                working_directory.join(path)
+            };
+            load_dotenv(&path, true, &process_keys, &mut environment)?;
         }
+    } else if default_dotenv_enabled(&environment)? {
+        load_dotenv(
+            &project_directory.join(".env"),
+            false,
+            &process_keys,
+            &mut environment,
+        )?;
     }
     Ok(environment)
+}
+
+fn default_dotenv_enabled(environment: &BTreeMap<String, String>) -> Result<bool, String> {
+    let Some(value) = environment.get("COMPOSE_DISABLE_ENV_FILE") else {
+        return Ok(true);
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "0" | "false" => Ok(true),
+        "1" | "true" => Ok(false),
+        _ => Err(format!(
+            "invalid COMPOSE_DISABLE_ENV_FILE value {value:?}; expected true, false, 1, or 0"
+        )),
+    }
+}
+
+fn load_dotenv(
+    path: &Path,
+    required: bool,
+    process_keys: &BTreeSet<String>,
+    environment: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    match fs::read_to_string(path) {
+        Ok(source) => parse_dotenv(&source, path, process_keys, environment),
+        Err(error) if !required && error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "cannot read Compose environment file {}: {error}",
+            path.display()
+        )),
+    }
 }
 
 fn parse_dotenv(

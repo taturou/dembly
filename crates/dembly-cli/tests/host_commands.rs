@@ -235,6 +235,31 @@ fn check_resolves_recursive_extends_and_rejects_an_extended_image_change_without
 }
 
 #[test]
+fn check_resolves_nested_extends_files_from_the_main_compose_directory_without_docker() {
+    let fixture = Fixture::new();
+    let base = fixture.enable_project_relative_nested_extends_image();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
+
+    let current = fixture.run(["check"]);
+
+    assert_success(&current);
+    let source = fs::read_to_string(&base).unwrap();
+    fs::write(
+        &base,
+        source.replace("example/dev:latest", "example/dev:changed"),
+    )
+    .unwrap();
+
+    let stale = fixture.run(["check"]);
+
+    assert_failure(&stale, "Dembly Lock is stale");
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
 fn check_resolves_a_yaml_merge_and_rejects_its_image_change_without_docker() {
     let fixture = Fixture::new();
     fixture.enable_yaml_merge_image();
@@ -294,6 +319,53 @@ fn check_interpolation_prefers_process_environment_over_project_dotenv() {
 
     assert_success(&current);
     let stale = fixture.run_with_tag(["check"], Some("changed-process"));
+
+    assert_failure(&stale, "Dembly Lock is stale");
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
+fn check_interpolation_can_disable_the_default_project_dotenv() {
+    let fixture = Fixture::new();
+    fixture.enable_interpolated_image_with_default();
+    fs::write(fixture.project.join(".env"), "TAG=from-dotenv\n").unwrap();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state_for_image(&digest, "example/dev:fallback");
+    fixture.write_runtime_artifacts(&digest);
+
+    let output = fixture.run_with_environment(["check"], &[("COMPOSE_DISABLE_ENV_FILE", "true")]);
+
+    assert_success(&output);
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
+fn check_interpolation_uses_ordered_compose_env_files_instead_of_default_dotenv() {
+    let fixture = Fixture::new();
+    fixture.enable_interpolated_image();
+    fs::write(fixture.project.join(".env"), "TAG=from-default\n").unwrap();
+    fs::create_dir_all(fixture.project.join("env")).unwrap();
+    fs::write(fixture.project.join("env/first.env"), "TAG=from-first\n").unwrap();
+    let last = fixture.project.join("env/last.env");
+    fs::write(&last, "TAG=from-last\n").unwrap();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state_for_image(&digest, "example/dev:from-last");
+    fixture.write_runtime_artifacts(&digest);
+
+    let current = fixture.run_with_environment(
+        ["check"],
+        &[("COMPOSE_ENV_FILES", "env/first.env,env/last.env")],
+    );
+
+    assert_success(&current);
+    fs::write(&last, "TAG=changed\n").unwrap();
+
+    let stale = fixture.run_with_environment(
+        ["check"],
+        &[("COMPOSE_ENV_FILES", "env/first.env,env/last.env")],
+    );
 
     assert_failure(&stale, "Dembly Lock is stale");
     assert_eq!(fixture.docker_log(), "");
@@ -544,10 +616,19 @@ impl Fixture {
     }
 
     fn run<const N: usize>(&self, arguments: [&str; N]) -> Output {
-        self.run_with_tag(arguments, None)
+        self.run_with_environment(arguments, &[])
     }
 
     fn run_with_tag<const N: usize>(&self, arguments: [&str; N], tag: Option<&str>) -> Output {
+        let variables = tag.map(|tag| vec![("TAG", tag)]).unwrap_or_default();
+        self.run_with_environment(arguments, &variables)
+    }
+
+    fn run_with_environment<const N: usize>(
+        &self,
+        arguments: [&str; N],
+        variables: &[(&str, &str)],
+    ) -> Output {
         let mut paths = vec![self.bin.clone()];
         paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
         let mut command = Command::new(env!("CARGO_BIN_EXE_dembly"));
@@ -559,9 +640,11 @@ impl Fixture {
             .env("DEMBLY_DOCKER_LOG", &self.docker_log)
             .env("DEMBLY_COMPOSE_JSON", &self.compose_json)
             .env("DEMBLY_IMAGE_JSON", &self.image_json)
-            .env_remove("TAG");
-        if let Some(tag) = tag {
-            command.env("TAG", tag);
+            .env_remove("TAG")
+            .env_remove("COMPOSE_DISABLE_ENV_FILE")
+            .env_remove("COMPOSE_ENV_FILES");
+        for (name, value) in variables {
+            command.env(name, value);
         }
         command.output().expect("dembly should start")
     }
@@ -622,6 +705,24 @@ impl Fixture {
         extended
     }
 
+    fn enable_project_relative_nested_extends_image(&self) -> PathBuf {
+        fs::write(
+            &self.compose,
+            "name: fixture\nservices:\n  dev:\n    extends:\n      file: fragments/intermediate.yaml\n      service: intermediate\n    user: vscode:staff\n",
+        )
+        .unwrap();
+        let intermediate = self.project.join("fragments/intermediate.yaml");
+        fs::create_dir_all(intermediate.parent().unwrap()).unwrap();
+        fs::write(
+            intermediate,
+            "services:\n  intermediate:\n    extends:\n      file: base.yaml\n      service: base\n",
+        )
+        .unwrap();
+        let base = self.project.join("base.yaml");
+        fs::write(&base, "services:\n  base:\n    image: example/dev:latest\n").unwrap();
+        base
+    }
+
     fn enable_yaml_merge_image(&self) {
         fs::write(
             &self.compose,
@@ -632,6 +733,10 @@ impl Fixture {
 
     fn enable_interpolated_image(&self) {
         self.replace_compose("example/dev:latest", "example/dev:${TAG}");
+    }
+
+    fn enable_interpolated_image_with_default(&self) {
+        self.replace_compose("example/dev:latest", "example/dev:${TAG:-fallback}");
     }
 
     fn write_lock(&self, stale: bool) {
