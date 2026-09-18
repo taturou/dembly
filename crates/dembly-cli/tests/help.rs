@@ -56,16 +56,29 @@ fn config_commands_reject_legacy_and_malformed_arguments() {
 }
 
 #[test]
-fn internal_runtime_probe_remains_available_but_hidden() {
-    let result = std::process::Command::new(env!("CARGO_BIN_EXE_dembly"))
-        .args(["__runtime", "probe", "root"])
-        .output()
-        .expect("dembly should start");
-    let output = String::from_utf8(result.stdout).expect("probe output should be UTF-8");
-    let fields = output.trim().split('\t').collect::<Vec<_>>();
-    assert!(result.status.success());
-    assert_eq!(fields.len(), 4);
-    assert_eq!(fields[0], "root");
+fn malformed_internal_runtime_commands_exit_two_and_probe_is_removed() {
+    for arguments in [
+        vec!["__runtime"],
+        vec!["__runtime", "probe", "root"],
+        vec!["__runtime", "init"],
+        vec!["__runtime", "check"],
+        vec!["__runtime", "check", "/plan.toml", "extra"],
+    ] {
+        let result = std::process::Command::new(env!("CARGO_BIN_EXE_dembly"))
+            .args(&arguments)
+            .output()
+            .expect("dembly should start");
+        assert_eq!(
+            result.status.code(),
+            Some(2),
+            "arguments={arguments:?}, stdout={}, stderr={}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("invalid internal runtime command")
+        );
+    }
 }
 
 #[test]

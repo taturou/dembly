@@ -2,9 +2,8 @@ mod commands;
 
 use dembly_cli::{parse_host_command, CliError, HostCommand};
 use std::io::{self, BufRead, Write};
-use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::ExitCode;
-use std::{fs, path::PathBuf};
 
 const PUBLIC_COMMANDS: &str = "\
 Dembly development environment compiler
@@ -29,7 +28,14 @@ fn main() -> ExitCode {
         .first()
         .is_some_and(|argument| argument == "__runtime")
     {
-        return runtime_command(&arguments[1..]);
+        let mut system = dembly_cli::runtime::NativeRuntimeSystem;
+        return match dembly_cli::runtime::run_runtime_command(&arguments[1..], &mut system) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("dembly runtime: {error}");
+                ExitCode::from(2)
+            }
+        };
     }
     if arguments.is_empty()
         || matches!(
@@ -179,133 +185,4 @@ fn prompt(label: &str, default: Option<&str>) -> Option<String> {
     } else {
         Some(value)
     }
-}
-
-fn runtime_command(arguments: &[String]) -> ExitCode {
-    if arguments.len() == 2 && arguments[0] == "probe" {
-        return runtime_probe(&arguments[1]);
-    }
-    if arguments.len() != 2 || arguments[0] != "init" {
-        eprintln!("dembly: invalid internal runtime command");
-        return ExitCode::from(2);
-    }
-    if unsafe { libc_geteuid() } != 0 {
-        eprintln!("dembly runtime: initializer must run as root");
-        return ExitCode::from(2);
-    }
-    let config = match dembly_runtime::load_runtime_config(&PathBuf::from(&arguments[1])) {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("dembly runtime: {error}");
-            return ExitCode::from(2);
-        }
-    };
-    for card in &config.cards {
-        if let Err(error) = dembly_runtime::mount_card(card) {
-            eprintln!("dembly runtime: {error}");
-            return ExitCode::from(2);
-        }
-    }
-    if let Err(error) = dembly_runtime::ensure_mount_targets_exist(&config.cards) {
-        eprintln!("dembly runtime: {error}");
-        return ExitCode::from(2);
-    }
-    if let Err(error) = dembly_runtime::create_exports(&config.exports) {
-        eprintln!("dembly runtime: {error}");
-        return ExitCode::from(2);
-    }
-    if let Err(error) = dembly_runtime::run_hooks(&config.hooks, &config.cards, &config.environment)
-    {
-        eprintln!("dembly runtime: {error}");
-        return ExitCode::from(2);
-    }
-    if let Err(error) = drop_privileges(config.runtime_user.uid, config.runtime_user.gid) {
-        eprintln!("dembly runtime: {error}");
-        return ExitCode::from(2);
-    }
-    let Some(program) = config.process_argv.first() else {
-        eprintln!("dembly runtime: process argv must not be empty");
-        return ExitCode::from(2);
-    };
-    let error = std::process::Command::new(program)
-        .args(&config.process_argv[1..])
-        .envs(&config.environment)
-        .exec();
-    eprintln!("dembly runtime: cannot exec {program}: {error}");
-    ExitCode::from(2)
-}
-
-fn runtime_probe(configured: &str) -> ExitCode {
-    let mut configured_parts = configured.split(':');
-    let candidate = configured_parts.next().unwrap_or_default();
-    let configured_group = configured_parts.next();
-    if configured_parts.next().is_some() {
-        eprintln!("dembly runtime probe: invalid configured user {configured}");
-        return ExitCode::from(2);
-    }
-    let passwd = match fs::read_to_string("/etc/passwd") {
-        Ok(value) => value,
-        Err(error) => {
-            eprintln!("dembly runtime probe: cannot read /etc/passwd: {error}");
-            return ExitCode::from(2);
-        }
-    };
-    for line in passwd.lines() {
-        let fields = line.split(':').collect::<Vec<_>>();
-        if fields.len() < 7 || (fields[0] != candidate && fields[2] != candidate) {
-            continue;
-        }
-        if fields[2].parse::<u32>().is_err() || fields[3].parse::<u32>().is_err() {
-            continue;
-        }
-        let gid = match configured_group.filter(|value| !value.is_empty()) {
-            None => fields[3].to_owned(),
-            Some(value) if value.parse::<u32>().is_ok() => value.to_owned(),
-            Some(value) => match group_id(value) {
-                Some(value) => value,
-                None => {
-                    eprintln!("dembly runtime probe: cannot resolve configured group {value}");
-                    return ExitCode::from(2);
-                }
-            },
-        };
-        println!("{}\t{}\t{}\t{}", fields[0], fields[2], gid, fields[5]);
-        return ExitCode::SUCCESS;
-    }
-    eprintln!("dembly runtime probe: cannot resolve configured user {configured} in /etc/passwd");
-    ExitCode::from(2)
-}
-
-fn group_id(name: &str) -> Option<String> {
-    fs::read_to_string("/etc/group")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            let fields = line.split(':').collect::<Vec<_>>();
-            (fields.len() >= 3 && fields[0] == name && fields[2].parse::<u32>().is_ok())
-                .then(|| fields[2].to_owned())
-        })
-}
-
-unsafe fn libc_geteuid() -> u32 {
-    extern "C" {
-        fn geteuid() -> u32;
-    }
-    unsafe { geteuid() }
-}
-
-fn drop_privileges(uid: u32, gid: u32) -> Result<(), String> {
-    extern "C" {
-        fn setgid(gid: u32) -> i32;
-        fn setuid(uid: u32) -> i32;
-    }
-    unsafe {
-        if setgid(gid) != 0 {
-            return Err(format!("cannot set GID to {gid}"));
-        }
-        if setuid(uid) != 0 {
-            return Err(format!("cannot set UID to {uid}"));
-        }
-    }
-    Ok(())
 }
