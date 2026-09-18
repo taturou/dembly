@@ -212,6 +212,41 @@ mise exec -- cargo build --locked --release --target x86_64-unknown-linux-musl -
 
 `scripts/check-linux.sh` checks the complete Linux development environment, including Docker, Compose, SquashFS support, and required host tools.
 
+## Release
+
+`scripts/release.sh` builds and publishes a Linux x86_64 release. Run it only from a clone that has permission to push to `taturou/dembly`.
+
+Before a normal release, install the development environment above and authenticate the GitHub CLI with an account that has repository write access:
+
+```sh
+gh auth login
+```
+
+The normal release command requires a clean `main` worktree whose `HEAD` equals `origin/main`. It runs the Linux environment check, formatting, Clippy, tests, and the release build. If a version argument differs from `[workspace.package].version`, it updates `Cargo.toml` and `Cargo.lock`, commits `chore(release): prepare v<VERSION>`, and pushes that commit. It then creates and pushes tag `v<VERSION>` and publishes a GitHub Release with the archive, its SHA-256 file, and the installer.
+
+```sh
+# Publish the version already declared in Cargo.toml.
+scripts/release.sh
+
+# Set, commit, and publish a specific SemVer version.
+scripts/release.sh 1.2.3
+```
+
+Use `--dry-run` to run the same quality gates and packaging in a temporary detached worktree. It neither changes the current worktree nor pushes commits, tags, or releases; generated artifacts are removed with the temporary worktree.
+
+```sh
+scripts/release.sh --dry-run
+scripts/release.sh --dry-run 1.2.3-rc.1
+```
+
+Use `--clean` only to remove locally generated archive, checksum, and build-info files for a version before recreating them. It does not remove the generated installer and does not affect GitHub.
+
+```sh
+scripts/release.sh --clean 1.2.3
+```
+
+All version arguments must be valid SemVer. Existing local artifacts must match the current commit; otherwise, clean that version's artifacts before rerunning the release.
+
 ## Limitations and evaluation
 
 Dembly currently supports Linux x86_64 and `x86_64-unknown-linux-musl` release binaries. Rootless Docker is outside its supported Runtime model because Card mounting requires privileged execution. The layouts below are illustrative artifact organization, not measurements.

@@ -245,6 +245,50 @@ mise exec -- cargo build --locked --release --target x86_64-unknown-linux-musl -
 
 `scripts/check-linux.sh` は Docker、Compose、SquashFS support、必要な host tool を含む完全な Linux 開発環境を検査します。
 
+## リリース
+
+`scripts/release.sh` は Linux x86_64 向けのリリースをビルドして公開します。
+`taturou/dembly` へ push できる clone でのみ実行してください。
+
+通常リリースの前に、上記の開発環境を準備し、リポジトリーへの書き込み権限を持つアカウントで GitHub CLI を認証します。
+
+```sh
+gh auth login
+```
+
+通常リリースでは、`HEAD` と `origin/main` が一致する、変更のない `main` worktree が必要です。
+Linux 環境検査、format、Clippy、test、リリース build を実行します。
+バージョン引数が `[workspace.package].version` と異なる場合は、`Cargo.toml` と `Cargo.lock` を更新し、`chore(release): prepare v<VERSION>` を commit・push します。
+続いて tag `v<VERSION>` を作成・push し、archive、SHA-256 ファイル、installer を含む GitHub Release を公開します。
+
+```sh
+# Cargo.toml に宣言されたバージョンを公開する
+scripts/release.sh
+
+# 指定した SemVer バージョンを設定、commit、公開する
+scripts/release.sh 1.2.3
+```
+
+`--dry-run` は、一時的な detached worktree で同じ品質検査と packaging を実行します。
+現在の worktree は変更せず、commit、tag、release の push も行いません。
+生成した artifact は一時 worktree とともに削除されます。
+
+```sh
+scripts/release.sh --dry-run
+scripts/release.sh --dry-run 1.2.3-rc.1
+```
+
+`--clean` は、再作成前に指定バージョンのローカル archive、checksum、build-info を削除するためだけに使います。
+生成済み installer は削除せず、GitHub にも影響しません。
+
+```sh
+scripts/release.sh --clean 1.2.3
+```
+
+すべてのバージョン引数は有効な SemVer でなければなりません。
+既存のローカル artifact は現在の commit と一致する必要があります。
+一致しない場合は、そのバージョンの artifact を削除してからリリースを再実行してください。
+
 ## 制限と評価
 
 Dembly は現在、Linux x86_64 と `x86_64-unknown-linux-musl` のリリース binary をサポートします。
