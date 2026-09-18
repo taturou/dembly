@@ -169,6 +169,62 @@ fn check_verifies_static_host_integrity_without_running_card_checks() {
 }
 
 #[test]
+fn check_rejects_a_managed_compose_image_changed_after_apply() {
+    let fixture = Fixture::new();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
+    fixture.replace_compose("example/dev:latest", "example/dev:changed");
+
+    let output = fixture.run(["check"]);
+
+    assert_failure(&output, "Dembly Lock is stale");
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
+fn check_rejects_an_inherited_compose_image_changed_after_apply() {
+    let fixture = Fixture::new();
+    let base = fixture.enable_devcontainer_with_inherited_image();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
+    let source = fs::read_to_string(&base).unwrap();
+    fs::write(
+        &base,
+        source.replace("example/dev:latest", "example/dev:changed"),
+    )
+    .unwrap();
+
+    let output = fixture.run(["check"]);
+
+    assert_failure(&output, "Dembly Lock is stale");
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
+fn check_guidance_preserves_the_devcontainer_compose_file_order_without_docker() {
+    let fixture = Fixture::new();
+    let base = fixture.enable_devcontainer_with_inherited_image();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
+
+    let output = fixture.run(["check"]);
+
+    assert_success(&output);
+    assert!(text(&output.stdout).contains(&format!(
+        "docker compose -f {} -f {} run --rm dev",
+        base.display(),
+        fixture.compose.display()
+    )));
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
 fn check_rejects_tampering_in_every_runtime_plan_section() {
     for (from, to) in [
         ("spec = \"vscode:staff\"", "spec = \"altered\""),
@@ -229,6 +285,25 @@ fn check_rejects_runtime_binary_byte_tampering() {
 
     assert_failure(&output, "Runtime binary digest");
     assert_eq!(fixture.snapshot(), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn check_rejects_a_runtime_binary_symbolic_link() {
+    let fixture = Fixture::new();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
+    let binary = fixture.project.join(".dembly/runtime/bin/dembly");
+    let linked_binary = fixture.project.join("linked-runtime-binary");
+    fs::rename(&binary, &linked_binary).unwrap();
+    std::os::unix::fs::symlink(&linked_binary, &binary).unwrap();
+
+    let output = fixture.run(["check"]);
+
+    assert_failure(&output, "symbolic link");
+    assert_eq!(fixture.docker_log(), "");
 }
 
 #[test]
@@ -394,6 +469,41 @@ impl Fixture {
         fs::write(&self.config, config).unwrap();
     }
 
+    fn enable_devcontainer_with_inherited_image(&self) -> PathBuf {
+        let mut config = fs::read_to_string(&self.config).unwrap();
+        config.push_str("\n[devcontainer]\npath = \"../.devcontainer/devcontainer.json\"\n");
+        fs::write(&self.config, config).unwrap();
+
+        let source = fs::read_to_string(&self.compose).unwrap();
+        fs::write(
+            &self.compose,
+            source.replace("    image: example/dev:latest\n", ""),
+        )
+        .unwrap();
+
+        let devcontainer = self.project.join(".devcontainer/devcontainer.json");
+        fs::create_dir_all(devcontainer.parent().unwrap()).unwrap();
+        fs::write(
+            &devcontainer,
+            r#"{
+  "dockerComposeFile": ["../compose.base.yaml", "../compose.yaml"],
+  "service": "dev",
+  "overrideCommand": false,
+  "containerUser": "root",
+  "remoteUser": "vscode"
+}
+"#,
+        )
+        .unwrap();
+        let base = self.project.join("compose.base.yaml");
+        fs::write(
+            &base,
+            "name: fixture\nservices:\n  dev:\n    image: example/dev:latest\n",
+        )
+        .unwrap();
+        base
+    }
+
     fn write_lock(&self, stale: bool) {
         let mut compose = ManagedCompose::read(&self.compose).unwrap();
         compose
@@ -437,6 +547,13 @@ impl Fixture {
                         (
                             "io.dembly.lock-digest".into(),
                             Value::String(lock_digest.into()),
+                        ),
+                        (
+                            "io.dembly.image-reference-digest".into(),
+                            Value::String(format!(
+                                "sha256:{}",
+                                sha256_bytes(b"example/dev:latest")
+                            )),
                         ),
                         (
                             "io.dembly.runtime-plan-digest".into(),

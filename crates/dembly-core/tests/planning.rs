@@ -169,7 +169,7 @@ fn runtime_export_and_volume_targets_reject_parent_traversal() {
 }
 
 #[test]
-fn runtime_volume_target_rejects_symlinked_components() {
+fn runtime_volume_target_symlinks_are_not_resolved_against_the_host_filesystem() {
     let root = std::env::temp_dir().join(format!(
         "dembly-runtime-target-symlink-{}",
         std::process::id()
@@ -189,7 +189,8 @@ fn runtime_volume_target_rejects_symlinked_components() {
     )
     .unwrap();
 
-    assert!(resolve_deck(&config, &variables_for(&config)).is_err());
+    let resolved = resolve_deck(&config, &variables_for(&config)).unwrap();
+    assert_eq!(resolved.volumes[0].target, link.join("cache"));
 }
 
 #[test]

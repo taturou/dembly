@@ -86,6 +86,10 @@ fn apply_stages_runtime_artifacts_and_updates_only_the_selected_service() {
         Value::String(digest)
     );
     assert_eq!(
+        dev["labels"]["io.dembly.image-reference-digest"],
+        Value::String(format!("sha256:{}", sha256_bytes(b"example/dev:latest")))
+    );
+    assert_eq!(
         dev["labels"]["io.dembly.runtime-plan-digest"],
         Value::String(format!(
             "sha256:{}",

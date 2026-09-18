@@ -18,6 +18,7 @@ pub struct HostPlan {
     pub devcontainer: Option<DevContainerDocument>,
     pub effective_service: EffectiveService,
     pub image: ImageConfig,
+    pub static_image: String,
     pub environment: BTreeMap<String, String>,
 }
 
@@ -26,6 +27,12 @@ pub struct CheckHostPlan {
     pub deck: ResolvedDeck,
     pub managed_compose: ManagedCompose,
     pub compose_files: Vec<PathBuf>,
+    pub static_image: String,
+}
+
+struct StaticComposeInputs {
+    devcontainer: Option<(PathBuf, DevContainerDocument)>,
+    files: Vec<PathBuf>,
 }
 
 impl CheckHostPlan {
@@ -48,11 +55,16 @@ impl CheckHostPlan {
         let managed_compose = ManagedCompose::read(&deck.compose_path).map_err(docker_error)?;
         let service = &deck.document.compose.service;
         managed_compose.service(service).map_err(docker_error)?;
-        let compose_files = vec![deck.compose_path.clone()];
+        let StaticComposeInputs {
+            files: compose_files,
+            ..
+        } = resolve_static_compose_files(&deck, service)?;
+        let static_image = resolve_static_compose_image(&compose_files, service)?;
         Ok(Self {
             deck,
             managed_compose,
             compose_files,
+            static_image,
         })
     }
 }
@@ -80,24 +92,11 @@ impl HostPlan {
             .service(service_name)
             .map_err(docker_error)?;
 
-        let (devcontainer, compose_files) = match &deck.document.devcontainer {
-            Some(reference) => {
-                let path = resolve_deck_path(&deck.root, &reference.path);
-                let document = load_devcontainer(&path).map_err(docker_error)?;
-                // The effective user is not known until the ordered Compose file set is
-                // inspected. All other cross-file constraints can be checked first.
-                let files = validate_devcontainer(
-                    &document,
-                    &path,
-                    &deck.compose_path,
-                    service_name,
-                    &document.remote_user,
-                )
-                .map_err(docker_error)?;
-                (Some((path, document)), files)
-            }
-            None => (None, vec![deck.compose_path.clone()]),
-        };
+        let StaticComposeInputs {
+            devcontainer,
+            files: compose_files,
+        } = resolve_static_compose_files(&deck, service_name)?;
+        let static_image = resolve_static_compose_image(&compose_files, service_name)?;
 
         let mut effective_service =
             inspect_compose(&compose_files, service_name).map_err(docker_error)?;
@@ -146,6 +145,7 @@ impl HostPlan {
             devcontainer,
             effective_service,
             image,
+            static_image,
             environment,
         })
     }
@@ -153,6 +153,85 @@ impl HostPlan {
     pub fn intended_user_spec(&self) -> &str {
         select_intended_user(&self.effective_service, &self.image)
     }
+}
+
+fn resolve_static_compose_files(
+    deck: &ResolvedDeck,
+    service: &str,
+) -> Result<StaticComposeInputs, CliError> {
+    match &deck.document.devcontainer {
+        Some(reference) => {
+            let path = resolve_deck_path(&deck.root, &reference.path);
+            let document = load_devcontainer(&path).map_err(docker_error)?;
+            // The effective user is not available in the Docker-free path. Passing the
+            // declared remote user keeps the structural and ordered-file validation shared.
+            let files = validate_devcontainer(
+                &document,
+                &path,
+                &deck.compose_path,
+                service,
+                &document.remote_user,
+            )
+            .map_err(docker_error)?;
+            Ok(StaticComposeInputs {
+                devcontainer: Some((path, document)),
+                files,
+            })
+        }
+        None => Ok(StaticComposeInputs {
+            devcontainer: None,
+            files: vec![deck.compose_path.clone()],
+        }),
+    }
+}
+
+fn resolve_static_compose_image(files: &[PathBuf], service: &str) -> Result<String, CliError> {
+    let services_key = serde_yaml::Value::String("services".into());
+    let service_key = serde_yaml::Value::String(service.into());
+    let image_key = serde_yaml::Value::String("image".into());
+    let mut image = None;
+    for path in files {
+        let bytes = std::fs::read(path).map_err(|error| {
+            CliError::new(format!(
+                "cannot read Compose file {}: {error}",
+                path.display()
+            ))
+        })?;
+        let document: serde_yaml::Value = serde_yaml::from_slice(&bytes).map_err(|error| {
+            CliError::new(format!(
+                "cannot parse Compose file {}: {error}",
+                path.display()
+            ))
+        })?;
+        let Some(service_value) = document
+            .as_mapping()
+            .and_then(|root| root.get(&services_key))
+            .and_then(serde_yaml::Value::as_mapping)
+            .and_then(|services| services.get(&service_key))
+        else {
+            continue;
+        };
+        let service_mapping = service_value.as_mapping().ok_or_else(|| {
+            CliError::new(format!(
+                "Compose service {service} in {} must be a mapping",
+                path.display()
+            ))
+        })?;
+        if let Some(value) = service_mapping.get(&image_key) {
+            let value = value.as_str().ok_or_else(|| {
+                CliError::new(format!(
+                    "Compose service {service} image in {} must be a string",
+                    path.display()
+                ))
+            })?;
+            image = Some(value.to_owned());
+        }
+    }
+    image.ok_or_else(|| {
+        CliError::new(format!(
+            "Compose service {service} has no statically declared image"
+        ))
+    })
 }
 
 fn inspect_inherited_service(

@@ -1,15 +1,13 @@
 use crate::{ResolvedRuntimeUser, RuntimeConfig, RuntimeExport, RuntimeHook};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 pub fn create_exports(exports: &[RuntimeExport]) -> Result<(), String> {
     for export in exports {
         if let Some(parent) = export.target.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                format!("cannot create export parent {}: {error}", parent.display())
-            })?;
+            ensure_directory_components(parent, true, "export parent")?;
         }
         match fs::symlink_metadata(&export.target) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -134,11 +132,69 @@ pub fn ensure_mount_targets_exist(cards: &[crate::RuntimeCard]) -> Result<(), St
 
 pub fn ensure_volume_targets_exist(targets: &[PathBuf]) -> Result<(), String> {
     for (index, target) in targets.iter().enumerate() {
-        if !Path::new(target).is_dir() {
-            return Err(format!(
-                "Compose Volume {index} target is not present as a directory: {}",
-                target.display()
-            ));
+        ensure_directory_components(target, false, &format!("Compose Volume {index} target"))?;
+    }
+    Ok(())
+}
+
+fn ensure_directory_components(path: &Path, create: bool, label: &str) -> Result<(), String> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| component == Component::ParentDir)
+    {
+        return Err(format!(
+            "{label} must be an absolute path without parent traversal: {}",
+            path.display()
+        ));
+    }
+
+    let mut current = PathBuf::from("/");
+    for component in path.components() {
+        let Component::Normal(component) = component else {
+            continue;
+        };
+        current.push(component);
+        loop {
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(format!(
+                        "{label} must not traverse a symbolic link: {}",
+                        current.display()
+                    ));
+                }
+                Ok(metadata) if metadata.is_dir() => break,
+                Ok(_) => {
+                    return Err(format!(
+                        "{label} component is not a directory: {}",
+                        current.display()
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {
+                    match fs::create_dir(&current) {
+                        Ok(()) => continue,
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                        Err(error) => {
+                            return Err(format!(
+                                "cannot create {label} {}: {error}",
+                                current.display()
+                            ));
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(format!(
+                        "{label} is not present as a directory: {}",
+                        current.display()
+                    ));
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "cannot inspect {label} {}: {error}",
+                        current.display()
+                    ));
+                }
+            }
         }
     }
     Ok(())

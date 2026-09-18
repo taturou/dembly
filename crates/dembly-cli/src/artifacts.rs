@@ -14,6 +14,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 pub const LOCK_DIGEST_LABEL: &str = "io.dembly.lock-digest";
+pub const IMAGE_REFERENCE_DIGEST_LABEL: &str = "io.dembly.image-reference-digest";
 pub const RUNTIME_PLAN_DIGEST_LABEL: &str = "io.dembly.runtime-plan-digest";
 pub const RUNTIME_BINARY_DIGEST_LABEL: &str = "io.dembly.runtime-binary-digest";
 
@@ -182,6 +183,10 @@ pub fn build_managed_fields(
         privileged: Value::Bool(true),
         labels: BTreeMap::from([
             (LOCK_DIGEST_LABEL.into(), string(lock_digest)),
+            (
+                IMAGE_REFERENCE_DIGEST_LABEL.into(),
+                string(artifact_digest(plan.static_image.as_bytes())),
+            ),
             (RUNTIME_PLAN_DIGEST_LABEL.into(), string(runtime_digest)),
             (RUNTIME_BINARY_DIGEST_LABEL.into(), string(binary_digest)),
         ]),

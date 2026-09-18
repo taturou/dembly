@@ -1,6 +1,7 @@
-use crate::commands::lock::{resolved_lock, resolved_lock_from_deck};
+use crate::commands::lock::{lock_matches_deck, resolved_lock};
 use dembly_cli::artifacts::{
-    artifact_digest, LOCK_DIGEST_LABEL, RUNTIME_BINARY_DIGEST_LABEL, RUNTIME_PLAN_DIGEST_LABEL,
+    artifact_digest, IMAGE_REFERENCE_DIGEST_LABEL, LOCK_DIGEST_LABEL, RUNTIME_BINARY_DIGEST_LABEL,
+    RUNTIME_PLAN_DIGEST_LABEL,
 };
 use dembly_cli::{CheckHostPlan, CliError, HostContext, HostPlan};
 use dembly_core::LockInput;
@@ -22,6 +23,7 @@ pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError
         .map_err(|error| CliError::new(error.to_string()))?
         .ok_or_else(|| CliError::new("Dembly applied state is missing; run dembly apply"))?;
     require_current_lock_generation(&state, &digest)?;
+    require_current_static_image(&plan, &state)?;
     static_applied_compose(&plan.managed_compose, &plan.deck.document.compose.service)?;
     validate_runtime_artifacts(&plan, &state, &digest)?;
 
@@ -107,11 +109,24 @@ fn require_current_static_lock(plan: &CheckHostPlan) -> Result<LockInput, CliErr
         .lock()
         .map_err(|error| CliError::new(error.to_string()))?
         .ok_or_else(|| CliError::new("Dembly Lock is missing; run dembly lock"))?;
-    let expected = resolved_lock_from_deck(&plan.deck, lock.image.clone())?;
-    if lock != expected {
+    if !lock_matches_deck(&lock, &plan.deck)? {
         return Err(CliError::new("Dembly Lock is stale; run dembly lock"));
     }
     Ok(lock)
+}
+
+fn require_current_static_image(
+    plan: &CheckHostPlan,
+    state: &dembly_docker::ApplyState,
+) -> Result<(), CliError> {
+    let expected = applied_label(state, IMAGE_REFERENCE_DIGEST_LABEL)?;
+    let current = artifact_digest(plan.static_image.as_bytes());
+    if current != expected {
+        return Err(CliError::new(
+            "Dembly Lock is stale because the Compose image changed; run dembly lock and dembly apply",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_runtime_artifacts(
@@ -152,12 +167,18 @@ fn validate_runtime_artifacts(
     }
 
     let binary = runtime_root.join("bin/dembly");
-    let metadata = std::fs::metadata(&binary).map_err(|error| {
+    let metadata = std::fs::symlink_metadata(&binary).map_err(|error| {
         CliError::new(format!(
             "cannot inspect Runtime binary {}: {error}",
             binary.display()
         ))
     })?;
+    if metadata.file_type().is_symlink() {
+        return Err(CliError::new(format!(
+            "Runtime binary {} must not be a symbolic link",
+            binary.display()
+        )));
+    }
     if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
         return Err(CliError::new(format!(
             "Runtime binary {} must be an executable regular file",

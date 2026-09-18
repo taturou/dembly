@@ -4,7 +4,6 @@ use crate::{
     CardEnvironment, ConfigDocument, CoreError, HostVariables, MountResource, VolumeOwner,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
@@ -350,22 +349,6 @@ fn normalize_runtime_target(value: &str, label: &str) -> Result<PathBuf, CoreErr
             std::path::Component::RootDir | std::path::Component::CurDir => {}
             std::path::Component::Normal(component) => {
                 normalized.push(component);
-                match fs::symlink_metadata(&normalized) {
-                    Ok(metadata) if metadata.file_type().is_symlink() => {
-                        return Err(error(format!(
-                            "{label} must not traverse a symlink: {}",
-                            normalized.display()
-                        )))
-                    }
-                    Ok(_) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(source) => {
-                        return Err(error(format!(
-                            "cannot inspect {label} {}: {source}",
-                            normalized.display()
-                        )))
-                    }
-                }
             }
             std::path::Component::ParentDir => {
                 return Err(error(format!("{label} must not contain parent traversal")))

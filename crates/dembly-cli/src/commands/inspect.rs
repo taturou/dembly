@@ -1,5 +1,6 @@
 use crate::commands::check::{lock_status, static_applied_state};
 use crate::commands::validate::write_warnings;
+use dembly_cli::artifacts::LOCK_DIGEST_LABEL;
 use dembly_cli::{CliError, HostContext, HostPlan};
 use std::fmt::Write as _;
 use std::io::Write;
@@ -107,7 +108,7 @@ pub(crate) fn render(plan: &HostPlan) -> String {
     let _ = writeln!(rendered, "    command: []");
     let _ = writeln!(rendered, "    user: root");
     let _ = writeln!(rendered, "    privileged: true");
-    let _ = writeln!(rendered, "    label: io.dembly.lock-digest");
+    let _ = writeln!(rendered, "    label: {LOCK_DIGEST_LABEL}");
     let _ = writeln!(rendered, "  artifacts:");
     let _ = writeln!(
         rendered,

@@ -43,8 +43,23 @@ pub(crate) fn resolved_lock_from_deck(
     deck: &ResolvedDeck,
     image: String,
 ) -> Result<LockInput, CliError> {
-    let cards = deck
-        .cards
+    let cards = resolved_card_identities(deck)?;
+    Ok(LockInput {
+        compose_path: deck.compose_path.display().to_string(),
+        service: deck.document.compose.service.clone(),
+        image,
+        cards,
+    })
+}
+
+pub(crate) fn lock_matches_deck(lock: &LockInput, deck: &ResolvedDeck) -> Result<bool, CliError> {
+    Ok(lock.compose_path == deck.compose_path.display().to_string()
+        && lock.service == deck.document.compose.service
+        && lock.cards == resolved_card_identities(deck)?)
+}
+
+fn resolved_card_identities(deck: &ResolvedDeck) -> Result<Vec<CardIdentity>, CliError> {
+    deck.cards
         .iter()
         .map(|card| {
             Ok(CardIdentity {
@@ -55,11 +70,5 @@ pub(crate) fn resolved_lock_from_deck(
                 filesystem_sha256: card.document.filesystem.sha256.clone(),
             })
         })
-        .collect::<Result<Vec<_>, CliError>>()?;
-    Ok(LockInput {
-        compose_path: deck.compose_path.display().to_string(),
-        service: deck.document.compose.service.clone(),
-        image,
-        cards,
-    })
+        .collect()
 }

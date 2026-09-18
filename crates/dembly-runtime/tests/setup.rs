@@ -1,6 +1,6 @@
 use dembly_runtime::{
-    ensure_volume_targets_exist, run_checks, ResolvedRuntimeUser, RuntimeCard, RuntimeCheck,
-    RuntimeConfig, RuntimeUserSpec,
+    create_exports, ensure_volume_targets_exist, run_checks, ResolvedRuntimeUser, RuntimeCard,
+    RuntimeCheck, RuntimeConfig, RuntimeExport, RuntimeUserSpec,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -84,6 +84,55 @@ fn every_compose_volume_target_must_exist() {
         error.contains(&missing.to_string_lossy().to_string()),
         "{error}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn compose_volume_target_rejects_a_symbolic_link_component() {
+    let root = temporary_directory("volume-target-symlink");
+    let actual = root.join("actual");
+    fs::create_dir_all(actual.join("cache")).unwrap();
+    let link = root.join("link");
+    std::os::unix::fs::symlink(&actual, &link).unwrap();
+
+    let error = ensure_volume_targets_exist(&[link.join("cache")]).unwrap_err();
+
+    assert!(error.contains("symbolic link"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn export_parent_rejects_a_symbolic_link_component_without_creating_the_target() {
+    let root = temporary_directory("export-parent-symlink");
+    let actual = root.join("actual");
+    fs::create_dir_all(&actual).unwrap();
+    let link = root.join("link");
+    std::os::unix::fs::symlink(&actual, &link).unwrap();
+    let target = link.join("bin/tool");
+
+    let error = create_exports(&[RuntimeExport {
+        source: PathBuf::from("/opt/tool/bin/tool"),
+        target: target.clone(),
+    }])
+    .unwrap_err();
+
+    assert!(error.contains("symbolic link"), "{error}");
+    assert!(!actual.join("bin/tool").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn export_parent_creates_missing_directory_components_without_following_links() {
+    let root = temporary_directory("export-parent-create");
+    let target = root.join("usr/local/bin/tool");
+
+    create_exports(&[RuntimeExport {
+        source: PathBuf::from("/opt/tool/bin/tool"),
+        target: target.clone(),
+    }])
+    .unwrap();
+
+    assert_eq!(fs::read_link(target).unwrap(), PathBuf::from("/opt/tool/bin/tool"));
 }
 
 fn config() -> RuntimeConfig {
