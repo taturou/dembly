@@ -1,8 +1,7 @@
 use crate::{
-    expand_bind_source, expand_bind_target, load_card, load_deck, plan_environment,
-    resolve_volume_path, validate_mount_targets, validate_shared_volume_consistency, Base,
-    BindVariables, CardDocument, CardEnvironment, CoreError, DeckDocument, MountResource,
-    VolumeOwner,
+    expand_bind_source, expand_bind_target, load_card, load_config, plan_environment,
+    resolve_volume_path, validate_mount_targets, validate_shared_volume_consistency, CardDocument,
+    CardEnvironment, ConfigDocument, CoreError, HostVariables, MountResource, VolumeOwner,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -11,7 +10,7 @@ use std::path::{Path, PathBuf};
 pub struct ResolvedDeck {
     pub path: PathBuf,
     pub root: PathBuf,
-    pub document: DeckDocument,
+    pub document: ConfigDocument,
     pub cards: Vec<ResolvedCard>,
     pub volumes: Vec<ResolvedVolume>,
     pub binds: Vec<ResolvedBind>,
@@ -37,40 +36,34 @@ pub struct ResolvedBind {
     pub owner: String,
     pub declared_source: String,
     pub source: PathBuf,
-    pub target: PathBuf,
+    pub target: String,
     pub mode: String,
     pub required: bool,
 }
 
 pub fn resolve_deck(
-    deck_path: &Path,
-    variables: &BindVariables,
+    config_path: &Path,
+    variables: &HostVariables,
 ) -> Result<ResolvedDeck, CoreError> {
-    let path = deck_path.canonicalize().map_err(|error| {
-        CoreError::parse(deck_path, format!("cannot resolve deck path: {error}"))
+    let path = config_path.canonicalize().map_err(|error| {
+        CoreError::parse(config_path, format!("cannot resolve config path: {error}"))
     })?;
     let root = path
         .parent()
-        .ok_or_else(|| CoreError::parse(&path, "deck.toml has no parent directory"))?
+        .ok_or_else(|| CoreError::parse(&path, "config.toml has no parent directory"))?
         .to_path_buf();
-    let deck = load_deck(&path)?;
-    validate_schema(&path, deck.schema_version, "Deck")?;
-    if deck.name.is_empty() || deck.name.contains('/') || deck.name.contains("..") {
-        return Err(error("Deck name must not be empty"));
+    let deck = load_config(&path)?;
+    if deck.compose.path.is_empty() || deck.compose.service.is_empty() {
+        return Err(error("Compose path and service are required"));
     }
-    match &deck.base {
-        Base::Image { image } if image.is_empty() => {
-            return Err(error("Base image must not be empty"))
-        }
-        Base::Compose { compose, service } if compose.is_empty() || service.is_empty() => {
-            return Err(error("Compose path and service are required"))
-        }
-        _ => {}
-    }
+    let host = HostVariables {
+        host_home: variables.host_home.clone(),
+        deck_root: root.clone(),
+    };
     let mut names = BTreeSet::new();
     let mut cards = Vec::new();
     for reference in &deck.cards {
-        let manifest_path = normalize_relative(&root, &reference.path, "Card manifest path")?;
+        let manifest_path = resolve_card_path(&root, &reference.path)?;
         let card = load_card(&manifest_path)?;
         validate_card(&manifest_path, &card)?;
         if !names.insert(card.name.clone()) {
@@ -111,14 +104,7 @@ pub fn resolve_deck(
     let mut binds = Vec::new();
     let mut warnings = Vec::new();
     for bind in &deck.binds {
-        resolve_bind(
-            &root,
-            "deck".into(),
-            bind,
-            variables,
-            &mut binds,
-            &mut warnings,
-        )?;
+        resolve_bind(&root, "deck".into(), bind, &host, &mut binds, &mut warnings)?;
     }
     for card in &cards {
         for bind in &card.document.binds {
@@ -126,7 +112,7 @@ pub fn resolve_deck(
                 &root,
                 format!("card:{}", card.document.name),
                 bind,
-                variables,
+                &host,
                 &mut binds,
                 &mut warnings,
             )?;
@@ -149,7 +135,7 @@ pub fn resolve_deck(
     mounts.extend(
         binds
             .iter()
-            .map(|bind| MountResource::new(&bind.owner, &bind.target)),
+            .map(|bind| MountResource::new(&bind.owner, runtime_target_path(&bind.target))),
     );
     validate_mount_targets(&mounts)?;
     validate_exports(&cards)?;
@@ -288,7 +274,7 @@ fn resolve_bind(
     root: &Path,
     owner: String,
     bind: &crate::Bind,
-    variables: &BindVariables,
+    variables: &HostVariables,
     result: &mut Vec<ResolvedBind>,
     warnings: &mut Vec<String>,
 ) -> Result<(), CoreError> {
@@ -308,13 +294,7 @@ fn resolve_bind(
             "Host Bind source",
         )?
     };
-    let target = expand_bind_target(&bind.target, variables)?;
-    if !target.is_absolute() {
-        return Err(error(format!(
-            "Host Bind target must be absolute: {}",
-            target.display()
-        )));
-    }
+    let target = expand_bind_target(&bind.target)?;
     if !source.exists() {
         if bind.required {
             return Err(error(format!(
@@ -359,6 +339,23 @@ fn normalize_relative(root: &Path, value: &str, label: &str) -> Result<PathBuf, 
         return Err(error(format!("{label} must be a Deck-root relative path")));
     }
     Ok(root.join(value))
+}
+
+fn resolve_card_path(root: &Path, value: &str) -> Result<PathBuf, CoreError> {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        normalize_relative(root, value, "Card manifest path")
+    }
+}
+
+fn runtime_target_path(value: &str) -> PathBuf {
+    PathBuf::from(
+        value
+            .replace("${HOME}", "/runtime/home")
+            .replace("${USER}", "runtime-user"),
+    )
 }
 fn error(message: impl Into<String>) -> CoreError {
     CoreError::parse("<resolved deck>", message)

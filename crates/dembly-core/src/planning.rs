@@ -3,11 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BindVariables {
+pub struct HostVariables {
     pub host_home: PathBuf,
     pub deck_root: PathBuf,
-    pub user: String,
-    pub home: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,7 +50,7 @@ impl CardEnvironment {
     }
 }
 
-pub fn expand_bind_source(value: &str, variables: &BindVariables) -> Result<PathBuf, CoreError> {
+pub fn expand_bind_source(value: &str, variables: &HostVariables) -> Result<PathBuf, CoreError> {
     expand(
         value,
         &[
@@ -63,15 +61,22 @@ pub fn expand_bind_source(value: &str, variables: &BindVariables) -> Result<Path
     .map(PathBuf::from)
 }
 
-pub fn expand_bind_target(value: &str, variables: &BindVariables) -> Result<PathBuf, CoreError> {
-    expand(
+pub fn expand_bind_target(value: &str) -> Result<String, CoreError> {
+    let expanded = expand(
         value,
-        &[
-            ("USER", variables.user.as_str()),
-            ("HOME", variables.home.as_str()),
-        ],
-    )
-    .map(PathBuf::from)
+        &[("USER", "runtime-user"), ("HOME", "/runtime/home")],
+    )?;
+    let path = Path::new(&expanded);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| component == std::path::Component::ParentDir)
+    {
+        return Err(domain_error(format!(
+            "Host Bind target must be an absolute Runtime path: {value}"
+        )));
+    }
+    Ok(value.to_owned())
 }
 
 pub fn resolve_volume_path(

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum CoreError {
-    DeckNotFound(PathBuf),
+    ConfigNotFound(PathBuf),
     Io {
         path: PathBuf,
         source: std::io::Error,
@@ -26,8 +26,8 @@ impl CoreError {
 impl Display for CoreError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DeckNotFound(path) => {
-                write!(formatter, "deck.toml was not found: {}", path.display())
+            Self::ConfigNotFound(path) => {
+                write!(formatter, "config was not found: {}", path.display())
             }
             Self::Io { path, source } => {
                 write!(formatter, "cannot read {}: {source}", path.display())
