@@ -63,6 +63,22 @@ fn set_lock_changes_only_the_embedded_lock_and_is_deterministic() {
 }
 
 #[test]
+fn set_lock_preserves_explicit_null_state() {
+    let source = format!("{COMPOSE}x-dembly:\n  schema_version: 1\n  state: null\n");
+    let fixture = Fixture::new("set-lock-null-state", &source);
+    let mut compose = ManagedCompose::read(&fixture.path).unwrap();
+
+    compose.set_lock(example_lock()).unwrap();
+
+    let rendered = parse(compose.to_bytes().unwrap());
+    assert_eq!(
+        x_dembly(&rendered).get(key("state")),
+        Some(&Value::Null),
+        "set_lock must preserve an explicit null state instead of removing its key"
+    );
+}
+
+#[test]
 fn first_apply_records_exact_values_and_preserves_other_services_and_entries() {
     let fixture = Fixture::new("first-apply", COMPOSE);
     let mut compose = ManagedCompose::read(&fixture.path).unwrap();
@@ -166,6 +182,26 @@ fn unapply_restores_missing_and_null_and_removes_only_state() {
     assert_eq!(
         sequence_field(dev, "volumes"),
         &vec![string("./workspace:/workspace")]
+    );
+}
+
+#[test]
+fn unapply_preserves_explicit_null_lock() {
+    let fixture = Fixture::new("unapply-null-lock", COMPOSE);
+    let mut compose = ManagedCompose::read(&fixture.path).unwrap();
+    compose.apply("dev", desired(), "sha256:lock").unwrap();
+    let mut applied = parse(compose.to_bytes().unwrap());
+    x_dembly_mut(&mut applied).insert(key("lock"), Value::Null);
+    fs::write(&fixture.path, serde_yaml::to_string(&applied).unwrap()).unwrap();
+    let mut compose = ManagedCompose::read(&fixture.path).unwrap();
+
+    compose.unapply("dev").unwrap();
+
+    let rendered = parse(compose.to_bytes().unwrap());
+    assert_eq!(
+        x_dembly(&rendered).get(key("lock")),
+        Some(&Value::Null),
+        "unapply must preserve an explicit null lock instead of removing its key"
     );
 }
 
@@ -451,6 +487,26 @@ fn without_lock(mut document: Value) -> Value {
         x_dembly.remove(key("lock"));
     }
     document
+}
+
+fn x_dembly(document: &Value) -> &Mapping {
+    document
+        .as_mapping()
+        .unwrap()
+        .get(key("x-dembly"))
+        .unwrap()
+        .as_mapping()
+        .unwrap()
+}
+
+fn x_dembly_mut(document: &mut Value) -> &mut Mapping {
+    document
+        .as_mapping_mut()
+        .unwrap()
+        .get_mut(key("x-dembly"))
+        .unwrap()
+        .as_mapping_mut()
+        .unwrap()
 }
 
 fn service<'a>(document: &'a Value, name: &str) -> &'a Mapping {

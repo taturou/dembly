@@ -54,3 +54,26 @@ No output
 - 同じ入力に対する2回目以降の直列化は byte-stable である。
 - `atomic_replace` が rename 後の parent directory sync で失敗した場合、置換自体は完了している可能性がある。
 - Task 4 の試験は rename 前の書込み失敗で既存 target が不変であることを確認している。
+
+## Fix round 1
+
+`DemblyExtension` の `lock` と `state` は、`Option<T>` によって missing と explicit null を同じ `None` へ変換していた。
+
+内部 wire model を `Missing`、`Null`、`Value(T)` の三値へ変更し、公開 API の `Option<T>` は維持した。
+
+`set_lock` が `state: null` を保持するテストと、`unapply` が `lock: null` を保持するテストを追加した。
+
+修正前の focused 実行では2件とも key 欠落によって失敗し、修正後は成功した。
+
+```text
+cargo test --locked -p dembly-docker --test managed_compose
+15 passed; 0 failed
+
+cargo test --locked -p dembly-docker
+20 passed; 0 failed
+
+cargo clippy --locked -p dembly-docker --all-targets -- -D warnings
+Finished successfully
+```
+
+原子置換の順序と permission 依存テストは、controller ruling に従って変更していない。

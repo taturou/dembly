@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::{Mapping, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -142,18 +142,62 @@ impl std::error::Error for Conflict {}
 #[serde(deny_unknown_fields)]
 struct DemblyExtension {
     schema_version: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    lock: Option<DemblyLock>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    state: Option<ApplyState>,
+    #[serde(default, skip_serializing_if = "EmbeddedValue::is_missing")]
+    lock: EmbeddedValue<DemblyLock>,
+    #[serde(default, skip_serializing_if = "EmbeddedValue::is_missing")]
+    state: EmbeddedValue<ApplyState>,
+}
+
+#[derive(Clone, Debug)]
+enum EmbeddedValue<T> {
+    Missing,
+    Null,
+    Value(T),
+}
+
+impl<T> EmbeddedValue<T> {
+    fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
+    }
+
+    fn as_option(&self) -> Option<&T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Missing | Self::Null => None,
+        }
+    }
+}
+
+impl<T> Default for EmbeddedValue<T> {
+    fn default() -> Self {
+        Self::Missing
+    }
+}
+
+impl<T: Serialize> Serialize for EmbeddedValue<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Value(value) => value.serialize(serializer),
+            Self::Missing | Self::Null => serializer.serialize_none(),
+        }
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for EmbeddedValue<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Option::<T>::deserialize(deserializer)? {
+            Some(value) => Self::Value(value),
+            None => Self::Null,
+        })
+    }
 }
 
 impl DemblyExtension {
     fn empty() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
-            lock: None,
-            state: None,
+            lock: EmbeddedValue::Missing,
+            state: EmbeddedValue::Missing,
         }
     }
 
@@ -213,16 +257,20 @@ impl ManagedCompose {
     }
 
     pub fn lock(&self) -> Result<Option<DemblyLock>, String> {
-        Ok(self.extension()?.and_then(|extension| extension.lock))
+        Ok(self
+            .extension()?
+            .and_then(|extension| extension.lock.as_option().cloned()))
     }
 
     pub fn state(&self) -> Result<Option<ApplyState>, String> {
-        Ok(self.extension()?.and_then(|extension| extension.state))
+        Ok(self
+            .extension()?
+            .and_then(|extension| extension.state.as_option().cloned()))
     }
 
     pub fn set_lock(&mut self, lock: DemblyLock) -> Result<(), String> {
         let mut extension = self.extension()?.unwrap_or_else(DemblyExtension::empty);
-        extension.lock = Some(lock);
+        extension.lock = EmbeddedValue::Value(lock);
         self.set_extension(extension)
     }
 
@@ -237,7 +285,7 @@ impl ManagedCompose {
             .extension()
             .map_err(|error| structural_conflict(service_name, X_DEMBLY, error))?
             .unwrap_or_else(DemblyExtension::empty);
-        let existing = extension.state.clone();
+        let existing = extension.state.as_option().cloned();
 
         if let Some(state) = &existing {
             if state.service != service_name {
@@ -265,7 +313,7 @@ impl ManagedCompose {
             update_service(service_name, service, existing, desired, lock_digest)?
         };
         let mut next_extension = extension;
-        next_extension.state = Some(next_state);
+        next_extension.state = EmbeddedValue::Value(next_state);
         candidate
             .set_extension(next_extension)
             .map_err(|error| structural_conflict(service_name, X_DEMBLY, error))?;
@@ -278,7 +326,7 @@ impl ManagedCompose {
             .extension()
             .map_err(|error| structural_conflict(service_name, X_DEMBLY, error))?
             .unwrap_or_else(DemblyExtension::empty);
-        let state = extension.state.clone().ok_or_else(|| {
+        let state = extension.state.as_option().cloned().ok_or_else(|| {
             Conflict::new(
                 service_name,
                 "state",
@@ -311,7 +359,7 @@ impl ManagedCompose {
             restore_labels(service_name, service, &state.fields.labels)?;
             restore_mounts(service_name, service, &state.fields.mounts)?;
         }
-        extension.state = None;
+        extension.state = EmbeddedValue::Missing;
         candidate
             .set_extension(extension)
             .map_err(|error| structural_conflict(service_name, X_DEMBLY, error))?;
