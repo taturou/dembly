@@ -28,8 +28,8 @@ fn init_runs_root_setup_in_strict_order_before_intended_user_exec() {
             "ensure_card_mounts:alpha,beta",
             "mount_bind:/run/dembly/binds/0:${HOME}/.gitconfig:ro:vscode",
             "create_export:/opt/cards/alpha/bin/tool:/usr/local/bin/tool",
-            "run_hook:alpha:/opt/cards/alpha/setup.sh",
             "set_environment:MODE=development",
+            "run_hook:alpha:/opt/cards/alpha/setup.sh",
             "set_gid:1000",
             "set_uid:1000",
             "exec:/usr/local/bin/start|--watch",
@@ -138,6 +138,27 @@ fn setup_failure_names_the_operation_and_target_and_prevents_drop_and_exec() {
             .iter()
             .any(|event| event.starts_with("set_uid")));
         assert!(!system.events.iter().any(|event| event.starts_with("exec:")));
+    }
+}
+
+#[test]
+fn environment_failure_prevents_root_hook_privilege_drop_and_exec() {
+    let plan = fixture("environment-error", &complete_config());
+    let mut system = RecordingSystem::root().failing("set_environment:");
+
+    let error =
+        run_runtime_command(&strings(["init", plan.to_str().unwrap()]), &mut system).unwrap_err();
+
+    assert!(error.contains("set runtime environment"), "{error}");
+    for forbidden in ["run_hook:", "set_gid:", "set_uid:", "exec:"] {
+        assert!(
+            !system
+                .events
+                .iter()
+                .any(|event| event.starts_with(forbidden)),
+            "unexpected {forbidden} after environment failure: {:?}",
+            system.events
+        );
     }
 }
 

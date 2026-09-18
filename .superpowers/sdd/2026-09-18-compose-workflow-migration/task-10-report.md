@@ -94,3 +94,34 @@ exit 0
 
 - `design/spec.md` 8、10.1から10.6
 - `design/superpowers/plans/2026-09-18-compose-workflow-migration.md` Task 10
+
+## Fix round 1/5
+
+### 原因
+
+`run_init`がpost-mount hookの完了後に計画済み環境を設定していました。
+
+この順序は`design/spec.md` 10.2の`export → environment → hook → privilege drop`と逆であり、hookが計画済み環境を利用できないだけでなく、環境設定失敗時にもroot hookが先に実行されていました。
+
+### RED
+
+```text
+cargo test -p dembly-cli --test runtime environment_failure_prevents_root_hook_privilege_drop_and_exec -- --exact
+environment_failure_prevents_root_hook_privilege_drop_and_exec ... FAILED
+
+unexpected run_hook: after environment failure:
+[..., "create_export:...", "run_hook:alpha:...", "set_environment:MODE=development"]
+```
+
+### 修正
+
+- 正常系の厳密なevent列を`export → environment → hook → setgid → setuid → exec`へ修正しました。
+- `set_environment`をexport完了後、hook開始前へ移動しました。
+- environment設定失敗時にhook、`setgid`、`setuid`、execが一切実行されない回帰テストを追加しました。
+
+### GREEN
+
+```text
+cargo test -p dembly-cli --test runtime
+8 passed; 0 failed
+```

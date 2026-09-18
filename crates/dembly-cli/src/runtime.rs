@@ -94,6 +94,9 @@ fn run_init(arguments: &[String], system: &mut impl RuntimeSystem) -> Result<(),
             )
         })?;
     }
+    system
+        .set_environment(&config.environment)
+        .map_err(|error| format!("cannot set runtime environment: {error}"))?;
     for hook in &config.hooks {
         system
             .run_hook(hook, &config.cards, &config.environment)
@@ -105,9 +108,6 @@ fn run_init(arguments: &[String], system: &mut impl RuntimeSystem) -> Result<(),
                 )
             })?;
     }
-    system
-        .set_environment(&config.environment)
-        .map_err(|error| format!("cannot set runtime environment: {error}"))?;
     system
         .set_gid(user.gid)
         .map_err(|error| format!("cannot set GID to {}: {error}", user.gid))?;
