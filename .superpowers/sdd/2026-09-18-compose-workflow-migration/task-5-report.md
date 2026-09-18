@@ -42,7 +42,7 @@ cargo test -p dembly-docker
 22 passed; 0 failed
 
 cargo test -p dembly-cli --test host_plan
-4 passed; 0 failed
+6 passed; 0 failed
 
 cargo test -p dembly-cli --no-run
 all CLI test targets compiled
@@ -74,3 +74,52 @@ image inspect <reference>
 
 - 既存の `crates/dembly-cli/tests/integration.rs` は移行前の lifecycle command を対象としているため、実行していません。
 - `cargo test -p dembly-cli --no-run` で、この既存 test target を含む全 CLI target のコンパイルは確認しました。
+
+## Fix round 1/5
+
+### 原因
+
+`HostPlan::resolve` は適用済みの `docker compose config` 出力をそのまま採用していました。
+
+この出力の process と user は Dembly 管理値へ置換済みであり、`x-dembly.state.fields` に保存された適用前の値を参照していませんでした。
+
+その結果、intended user は `root` になり、Dev Containers の `remoteUser` 検証と後続の再適用計画が誤りました。
+
+CLI 側では `main.rs` と library が同じ `args.rs` を別 module としてコンパイルしており、`HostCommand`、`HostContext`、`CliError` が別型になっていました。
+
+### 修正
+
+- applied state がある場合は entrypoint、command、user の `original` を effective service へ復元します。
+- `original: missing` は前段 Compose ファイルから継承されるため、管理対象ファイルを除いた同順序の prefix を `docker compose ... config --format json` で解決します。
+- `original: null` は前段値を継承せず image default へ戻すため、`missing` と区別します。
+- state の service が設定対象と一致しない場合は、別サービスの original を使用せずエラーにします。
+- `main.rs` の重複 `mod args` を削除し、binary と `commands::init` は library が公開する共有型を使用します。
+
+外部 Docker 呼び出しは `docker compose ... config --format json` と `docker image inspect` のままです。
+
+### RED
+
+```text
+cargo test -p dembly-cli --test host_plan applied_state_restores_pre_apply_process_and_user_before_devcontainer_validation -- --exact
+FAILED: devcontainer remoteUser vscode does not match intended user root
+
+cargo test -p dembly-cli --test host_plan applied_state_restores_originals_inherited_from_earlier_compose_files -- --exact
+FAILED: devcontainer remoteUser base-user does not match intended user image-user
+```
+
+最初の失敗は管理対象 Compose 自体に元値がある経路、二番目は元値を前段 Compose から継承する経路を再現しています。
+
+### GREEN
+
+```text
+cargo test -p dembly-cli --test host_plan
+6 passed; 0 failed
+
+cargo test -p dembly-cli --test help
+5 passed; 0 failed
+
+cargo test -p dembly-cli --test init
+10 passed; 0 failed
+```
+
+applied state の fake Docker test は full Compose、必要な場合だけ前段 prefix、image inspect の argv を順序込みで検証しています。

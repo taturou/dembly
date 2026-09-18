@@ -1,4 +1,7 @@
 use dembly_cli::HostPlan;
+use dembly_docker::{ManagedCompose, ManagedFields};
+use serde_yaml::Value;
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -66,6 +69,105 @@ fn intended_user_falls_back_to_image_user_then_root() {
     fixture.write_image_json("");
     fixture.write_devcontainer("dev", &["../compose.base.yaml", "../compose.yaml"], "root");
     assert_eq!(fixture.resolve().unwrap().intended_user_spec(), "root");
+}
+
+#[test]
+fn applied_state_restores_pre_apply_process_and_user_before_devcontainer_validation() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    let fixture = Fixture::new();
+    fs::write(
+        &fixture.managed_compose,
+        "name: fixture\nservices:\n  dev:\n    image: example/dev:latest\n    entrypoint: [/original-init]\n    command: [serve]\n    user: vscode:staff\n",
+    )
+    .unwrap();
+    let mut compose = ManagedCompose::read(&fixture.managed_compose).unwrap();
+    compose
+        .apply(
+            "dev",
+            ManagedFields {
+                entrypoint: Value::Sequence(vec![Value::String("/run/dembly/bin/dembly".into())]),
+                command: Value::Sequence(Vec::new()),
+                user: Value::String("root".into()),
+                privileged: Value::Bool(true),
+                labels: BTreeMap::new(),
+                mounts: Vec::new(),
+            },
+            "sha256:applied",
+        )
+        .unwrap();
+    fs::write(&fixture.managed_compose, compose.to_bytes().unwrap()).unwrap();
+    fixture.write_compose_json(
+        r#"{"services":{"dev":{"image":"example/dev:latest","entrypoint":["/run/dembly/bin/dembly"],"command":[],"user":"root","environment":{"MODE":"compose"}}}}"#,
+    );
+
+    let plan = fixture.resolve().unwrap();
+
+    assert_eq!(plan.intended_user_spec(), "vscode:staff");
+    assert_eq!(plan.effective_service.user.as_deref(), Some("vscode:staff"));
+    assert_eq!(
+        plan.effective_service.entrypoint,
+        Some(vec!["/original-init".into()])
+    );
+    assert_eq!(plan.effective_service.command, Some(vec!["serve".into()]));
+    assert_eq!(
+        fixture.log(),
+        format!(
+            "compose\n-f\n{}\n-f\n{}\nconfig\n--format\njson\nimage\ninspect\nexample/dev:latest\n",
+            fixture.base_compose.display(),
+            fixture.managed_compose.display()
+        )
+    );
+}
+
+#[test]
+fn applied_state_restores_originals_inherited_from_earlier_compose_files() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    let fixture = Fixture::new();
+    let mut compose = ManagedCompose::read(&fixture.managed_compose).unwrap();
+    compose
+        .apply(
+            "dev",
+            ManagedFields {
+                entrypoint: Value::Sequence(vec![Value::String("/run/dembly/bin/dembly".into())]),
+                command: Value::Sequence(Vec::new()),
+                user: Value::String("root".into()),
+                privileged: Value::Bool(true),
+                labels: BTreeMap::new(),
+                mounts: Vec::new(),
+            },
+            "sha256:applied",
+        )
+        .unwrap();
+    fs::write(&fixture.managed_compose, compose.to_bytes().unwrap()).unwrap();
+    fixture.write_compose_json(
+        r#"{"services":{"dev":{"image":"example/dev:latest","entrypoint":["/run/dembly/bin/dembly"],"command":[],"user":"root","environment":{"MODE":"compose"}}}}"#,
+    );
+    fixture.write_base_compose_json(
+        r#"{"services":{"dev":{"image":"example/dev:latest","entrypoint":["/base-init"],"command":["serve"],"user":"base-user:staff","environment":{"MODE":"compose"}}}}"#,
+    );
+    fixture.write_devcontainer(
+        "dev",
+        &["../compose.base.yaml", "../compose.yaml"],
+        "base-user",
+    );
+
+    let plan = fixture.resolve().unwrap();
+
+    assert_eq!(plan.intended_user_spec(), "base-user:staff");
+    assert_eq!(
+        plan.effective_service.entrypoint,
+        Some(vec!["/base-init".into()])
+    );
+    assert_eq!(plan.effective_service.command, Some(vec!["serve".into()]));
+    assert_eq!(
+        fixture.log(),
+        format!(
+            "compose\n-f\n{}\n-f\n{}\nconfig\n--format\njson\ncompose\n-f\n{}\nconfig\n--format\njson\nimage\ninspect\nexample/dev:latest\n",
+            fixture.base_compose.display(),
+            fixture.managed_compose.display(),
+            fixture.base_compose.display()
+        )
+    );
 }
 
 #[test]
@@ -139,6 +241,7 @@ struct Fixture {
     bin: PathBuf,
     log: PathBuf,
     compose_json: PathBuf,
+    base_compose_json: PathBuf,
     image_json: PathBuf,
 }
 
@@ -167,6 +270,7 @@ impl Fixture {
             filesystem: card_root.join("rootfs.squashfs"),
             log: root.join("docker.log"),
             compose_json: root.join("compose.json"),
+            base_compose_json: root.join("base-compose.json"),
             image_json: root.join("image.json"),
             root,
             bin,
@@ -206,6 +310,9 @@ impl Fixture {
         self.write_compose_json(
             r#"{"services":{"dev":{"image":"example/dev:latest","entrypoint":["/init"],"command":["serve"],"user":"vscode:staff","environment":{"MODE":"compose","COMPOSE":"only","REMOVED":null}}}}"#,
         );
+        self.write_base_compose_json(
+            r#"{"services":{"dev":{"image":"example/dev:latest","environment":{}}}}"#,
+        );
         self.write_image_json("image-user");
         fs::write(&self.log, "").unwrap();
     }
@@ -229,6 +336,10 @@ impl Fixture {
         fs::write(&self.compose_json, value).unwrap();
     }
 
+    fn write_base_compose_json(&self, value: &str) {
+        fs::write(&self.base_compose_json, value).unwrap();
+    }
+
     fn write_image_json(&self, user: &str) {
         fs::write(
             &self.image_json,
@@ -243,7 +354,7 @@ impl Fixture {
         let docker = self.bin.join("docker");
         fs::write(
             &docker,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DEMBLY_DOCKER_LOG\"\nif [ \"$1\" = compose ]; then\n  exec /bin/cat \"$DEMBLY_COMPOSE_JSON\"\nfi\nif [ \"$1\" = image ] && [ \"$2\" = inspect ]; then\n  exec /bin/cat \"$DEMBLY_IMAGE_JSON\"\nfi\nexit 91\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DEMBLY_DOCKER_LOG\"\nif [ \"$1\" = compose ] && [ \"$#\" -eq 6 ]; then\n  exec /bin/cat \"$DEMBLY_BASE_COMPOSE_JSON\"\nfi\nif [ \"$1\" = compose ]; then\n  exec /bin/cat \"$DEMBLY_COMPOSE_JSON\"\nfi\nif [ \"$1\" = image ] && [ \"$2\" = inspect ]; then\n  exec /bin/cat \"$DEMBLY_IMAGE_JSON\"\nfi\nexit 91\n",
         )
         .unwrap();
         let mut permissions = fs::metadata(&docker).unwrap().permissions();
@@ -260,6 +371,7 @@ impl Fixture {
         std::env::set_var("HOME", self.root.join("host-home"));
         std::env::set_var("DEMBLY_DOCKER_LOG", &self.log);
         std::env::set_var("DEMBLY_COMPOSE_JSON", &self.compose_json);
+        std::env::set_var("DEMBLY_BASE_COMPOSE_JSON", &self.base_compose_json);
         std::env::set_var("DEMBLY_IMAGE_JSON", &self.image_json);
         let result = HostPlan::resolve(&self.config);
         std::env::set_var("PATH", path);
@@ -268,6 +380,7 @@ impl Fixture {
             "DEMBLY_DOCKER_LOG",
             "DEMBLY_COMPOSE_JSON",
             "DEMBLY_IMAGE_JSON",
+            "DEMBLY_BASE_COMPOSE_JSON",
         ] {
             std::env::remove_var(key);
         }
