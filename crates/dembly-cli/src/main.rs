@@ -86,7 +86,7 @@ fn dispatch(
         HostCommand::Unapply(context) => commands::unapply::run(&context, output),
         HostCommand::Inspect(context) => commands::inspect::run(&context, output),
         HostCommand::Check(context) => commands::check::run(&context, output),
-        HostCommand::CardBuild(arguments) => card_build(&arguments),
+        HostCommand::CardBuild(arguments) => card_build(&arguments, input, output),
     }
 }
 
@@ -95,7 +95,11 @@ fn report_error(error: CliError) -> ExitCode {
     ExitCode::from(2)
 }
 
-fn card_build(arguments: &[String]) -> Result<(), CliError> {
+fn card_build(
+    arguments: &[String],
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
     if arguments.len() < 2 {
         return Err(CliError::new(
             "card build requires <tool-root> <cards-root>",
@@ -141,12 +145,13 @@ fn card_build(arguments: &[String]) -> Result<(), CliError> {
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or_default();
-        name = name.or_else(|| prompt("Card name", Some(default_name)));
-        version = version.or_else(|| prompt("Version", None));
+        name = name.or_else(|| prompt(input, output, "Card name", Some(default_name)));
+        version = version.or_else(|| prompt(input, output, "Version", None));
         let default_mount = name
             .as_ref()
             .map(|value| format!("/opt/dembly/cards/{value}"));
-        mount_target = mount_target.or_else(|| prompt("Mount target", default_mount.as_deref()));
+        mount_target = mount_target
+            .or_else(|| prompt(input, output, "Mount target", default_mount.as_deref()));
     }
     let request = dembly_card::CardBuildRequest {
         tool_root,
@@ -159,7 +164,10 @@ fn card_build(arguments: &[String]) -> Result<(), CliError> {
     };
     let result = dembly_card::build_card(&request)
         .map_err(|error| CliError::new(format!("card build: {error}")))?;
-    println!("built {}", result.card_root.display());
+    writeln!(output, "built {}", result.card_root.display())
+        .map_err(|error| CliError::new(format!("cannot write card build result: {error}")))?;
+    writeln!(output, "sha256: {}", result.sha256)
+        .map_err(|error| CliError::new(format!("cannot write card build result: {error}")))?;
     Ok(())
 }
 
@@ -171,14 +179,19 @@ fn required_option(arguments: &[String], index: usize, option: &str) -> Result<S
         .ok_or_else(|| CliError::new(format!("{option} requires a value")))
 }
 
-fn prompt(label: &str, default: Option<&str>) -> Option<String> {
+fn prompt(
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+    label: &str,
+    default: Option<&str>,
+) -> Option<String> {
     match default {
-        Some(default) => print!("{label} [{default}]: "),
-        None => print!("{label}: "),
+        Some(default) => write!(output, "{label} [{default}]: ").ok()?,
+        None => write!(output, "{label}: ").ok()?,
     }
-    io::stdout().flush().ok()?;
+    output.flush().ok()?;
     let mut value = String::new();
-    io::stdin().read_line(&mut value).ok()?;
+    input.read_line(&mut value).ok()?;
     let value = value.trim().to_owned();
     if value.is_empty() {
         default.map(str::to_owned)

@@ -67,7 +67,7 @@ rg -n 'deck\.toml|deck\.lock|Base::Image|ImageRuntimePlan|compose_override|dembl
 
 ```text
 cargo test --workspace
-119 passed; 0 failed
+122 passed; 0 failed
 
 cargo clippy --workspace --all-targets -- -D warnings
 exit 0
@@ -89,3 +89,57 @@ exit 0
 
 - `design/spec.md` 4.3、4.4、4.5、7.4、7.5、9.5、10.1 から 10.6、14
 - `design/superpowers/plans/2026-09-18-compose-workflow-migration.md` Task 11
+
+## Fix round 1/5
+
+### P2 所見
+
+旧 lifecycle テストの削除時に、Compose acceptance へ統合されない次の仕様回帰テストまで削除していました。
+
+- 対話的 `dembly card build`
+- 必須 Host Bind 欠落時の拒否
+- Card 間で重複する export target の拒否
+
+3契約を `crates/dembly-cli/tests/card_and_validation.rs` の独立した focused tests として復元しました。
+
+### 対話的 Card build
+
+timeout 付きの実 process テストを先に追加し、stdin prompt で停止する RED を確認しました。
+
+```text
+card build did not finish: stdout=Card name [interactive-tool]:  stderr=
+test result: FAILED. 0 passed; 1 failed
+```
+
+原因は `main` が stdin を lock した後、`card_build` の prompt が `io::stdin()`を再取得していたことです。
+
+`dispatch` の `BufRead` と `Write` を `card_build` と prompt へ渡し、Card名、version、mount target を同じ stream から読み取るよう修正しました。
+
+spec 9.9 に従い、成功出力へ Card root に加えて filesystem SHA-256 を出力します。
+
+### 必須 Bind と重複 export
+
+既存実装が残っていた2契約は、一時 mutation でテストの検出力を確認しました。
+
+```text
+# bind.required 分岐を反転
+validate_rejects_a_missing_required_host_bind ... FAILED
+stdout=valid: .../.dembly/config.toml
+
+# validate_exports 呼出しを削除
+validate_rejects_duplicate_export_targets_across_cards ... FAILED
+stdout=valid: .../.dembly/config.toml
+```
+
+mutation は直ちに復元し、Core実装へ差分を残していません。
+
+### GREEN
+
+```text
+cargo test -p dembly-cli --test card_and_validation -- --nocapture
+3 passed; 0 failed
+```
+
+対話テストは生成されたmanifest、SquashFS、default Card名、version、default mount target、標準出力のCard root/checksum、入力tool root不変を検証します。
+
+validation testsはDocker inspectionより前に対象エラーが返る実CLI境界を検証します。
