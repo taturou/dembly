@@ -15,6 +15,7 @@ pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError
 pub(crate) fn render(plan: &HostPlan) -> String {
     let mut rendered = String::new();
     let _ = writeln!(rendered, "config: {}", plan.deck.path.display());
+    let _ = writeln!(rendered, "deck root: {}", plan.deck.root.display());
     let _ = writeln!(rendered, "compose:");
     let _ = writeln!(
         rendered,
@@ -95,5 +96,25 @@ pub(crate) fn render(plan: &HostPlan) -> String {
             let _ = writeln!(rendered, "conflicts: {error}");
         }
     }
+    let runtime_root = plan.deck.root.join("runtime");
+    let service = &plan.deck.document.compose.service;
+    let _ = writeln!(rendered, "next apply:");
+    let _ = writeln!(rendered, "  fields:");
+    let _ = writeln!(
+        rendered,
+        "    entrypoint: /run/dembly/bin/dembly __runtime init /run/dembly/runtime/{service}.toml"
+    );
+    let _ = writeln!(rendered, "    command: []");
+    let _ = writeln!(rendered, "    user: root");
+    let _ = writeln!(rendered, "    privileged: true");
+    let _ = writeln!(rendered, "    label: io.dembly.lock-digest");
+    let _ = writeln!(rendered, "  artifacts:");
+    let _ = writeln!(
+        rendered,
+        "    - {}/{}.toml",
+        runtime_root.display(),
+        service
+    );
+    let _ = writeln!(rendered, "    - {}/bin/dembly", runtime_root.display());
     rendered
 }

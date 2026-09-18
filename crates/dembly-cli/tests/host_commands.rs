@@ -1,12 +1,12 @@
 use dembly_core::sha256_file;
-use dembly_docker::{DemblyLock, ManagedCompose, ManagedFields};
+use dembly_docker::{DemblyLock, ManagedCompose, ManagedFields, ManagedMount, ManagedValue};
 use dembly_runtime::{render_runtime_config, RuntimeCard, RuntimeConfig, RuntimeUserSpec};
 use serde_yaml::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
@@ -51,6 +51,24 @@ fn validate_warns_about_an_optional_missing_bind_without_writing_project_files()
 }
 
 #[test]
+fn validate_rejects_external_changes_to_every_managed_field_without_writing_project_files() {
+    for field in ["user", "privileged", "label", "mount"] {
+        let fixture = Fixture::new();
+        fixture.write_lock(false);
+        let digest = fixture.current_lock_digest();
+        fixture.write_applied_state(&digest);
+        fixture.mutate_managed_field(field);
+        let before = fixture.snapshot();
+
+        let output = fixture.run(["validate"]);
+
+        assert_failure(&output, "conflicts");
+        assert_eq!(fixture.snapshot(), before, "field={field}");
+        fixture.assert_read_only_docker_calls();
+    }
+}
+
+#[test]
 fn inspect_renders_the_resolved_host_state_without_writing_project_files() {
     let fixture = Fixture::new();
     let before = fixture.snapshot();
@@ -61,11 +79,14 @@ fn inspect_renders_the_resolved_host_state_without_writing_project_files() {
     assert_eq!(
         text(&output.stdout),
         format!(
-            "config: {}\ncompose:\n  project: fixture\n  path: {}\n  service: dev\nuser: vscode:staff\ncards:\n  - tool 1\n    manifest: {}\n    filesystem: {}\n    mount: /opt/tool\nmounts:\n  - card:tool -> /opt/tool\nenvironment:\n  CARD=enabled\n  COMPOSE=only\n  MODE=deck\n  PATH=/opt/tool/bin:/deck/bin:/usr/bin\nlock: missing\napply: not applied\nconflicts: none\n",
+            "config: {}\ndeck root: {}\ncompose:\n  project: fixture\n  path: {}\n  service: dev\nuser: vscode:staff\ncards:\n  - tool 1\n    manifest: {}\n    filesystem: {}\n    mount: /opt/tool\nmounts:\n  - card:tool -> /opt/tool\nenvironment:\n  CARD=enabled\n  COMPOSE=only\n  MODE=deck\n  PATH=/opt/tool/bin:/deck/bin:/usr/bin\nlock: missing\napply: not applied\nconflicts: none\nnext apply:\n  fields:\n    entrypoint: /run/dembly/bin/dembly __runtime init /run/dembly/runtime/dev.toml\n    command: []\n    user: root\n    privileged: true\n    label: io.dembly.lock-digest\n  artifacts:\n    - {}/runtime/dev.toml\n    - {}/runtime/bin/dembly\n",
             fixture.config.display(),
+            fixture.config.parent().unwrap().display(),
             fixture.compose.display(),
             fixture.card_manifest.display(),
             fixture.filesystem.display(),
+            fixture.config.parent().unwrap().display(),
+            fixture.config.parent().unwrap().display(),
         )
     );
     assert_eq!(fixture.snapshot(), before);
@@ -114,7 +135,8 @@ fn check_requires_an_applied_state_without_writing_project_files() {
 fn check_reports_a_managed_field_conflict_without_writing_project_files() {
     let fixture = Fixture::new();
     fixture.write_lock(false);
-    fixture.write_applied_state();
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
     fixture.replace_compose("user: root", "user: altered");
     let before = fixture.snapshot();
 
@@ -129,16 +151,53 @@ fn check_reports_a_managed_field_conflict_without_writing_project_files() {
 fn check_verifies_static_host_integrity_without_running_card_checks() {
     let fixture = Fixture::new();
     fixture.write_lock(false);
-    fixture.write_applied_state();
-    fixture.write_runtime_artifacts();
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
     let before = fixture.snapshot();
 
     let output = fixture.run(["check"]);
 
     assert_success(&output);
     assert!(text(&output.stdout).contains("host integrity: valid"));
-    assert!(text(&output.stdout).contains("docker compose run"));
-    assert!(text(&output.stdout).contains("__runtime check"));
+    assert!(text(&output.stdout).contains(&format!(
+        "Run Card checks with: docker compose -f {} run --rm dev /run/dembly/bin/dembly __runtime check /run/dembly/runtime/dev.toml",
+        fixture.compose.display()
+    )));
+    assert_eq!(fixture.snapshot(), before);
+    fixture.assert_read_only_docker_calls();
+}
+
+#[test]
+fn check_rejects_runtime_state_from_a_previous_lock_generation_without_writing_project_files() {
+    let fixture = Fixture::new();
+    fixture.write_lock(true);
+    let old_digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&old_digest);
+    fixture.write_runtime_artifacts(&old_digest);
+    fixture.write_lock(false);
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["check"]);
+
+    assert_failure(&output, "lock digest");
+    assert_eq!(fixture.snapshot(), before);
+    fixture.assert_read_only_docker_calls();
+}
+
+#[test]
+fn check_rejects_a_managed_lock_label_from_a_previous_generation_without_writing_project_files() {
+    let fixture = Fixture::new();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
+    fixture.replace_applied_lock_label("sha256:previous");
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["check"]);
+
+    assert_failure(&output, "managed label");
     assert_eq!(fixture.snapshot(), before);
     fixture.assert_read_only_docker_calls();
 }
@@ -271,7 +330,16 @@ impl Fixture {
         fs::write(&self.compose, compose.to_bytes().unwrap()).unwrap();
     }
 
-    fn write_applied_state(&self) {
+    fn current_lock_digest(&self) -> String {
+        let lock = ManagedCompose::read(&self.compose)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .unwrap();
+        canonical_lock_digest(&lock)
+    }
+
+    fn write_applied_state(&self, lock_digest: &str) {
         let mut compose = ManagedCompose::read(&self.compose).unwrap();
         compose
             .apply(
@@ -281,10 +349,18 @@ impl Fixture {
                     command: Value::Sequence(Vec::new()),
                     user: Value::String("root".into()),
                     privileged: Value::Bool(true),
-                    labels: BTreeMap::new(),
-                    mounts: Vec::new(),
+                    labels: BTreeMap::from([(
+                        "io.dembly.lock-digest".into(),
+                        Value::String(lock_digest.into()),
+                    )]),
+                    mounts: vec![ManagedMount {
+                        target: "/run/dembly/runtime/dev.toml".into(),
+                        value: Value::String(
+                            "./runtime/dev.toml:/run/dembly/runtime/dev.toml:ro".into(),
+                        ),
+                    }],
                 },
-                "sha256:state",
+                lock_digest,
             )
             .unwrap();
         fs::write(&self.compose, compose.to_bytes().unwrap()).unwrap();
@@ -295,12 +371,12 @@ impl Fixture {
         .unwrap();
     }
 
-    fn write_runtime_artifacts(&self) {
+    fn write_runtime_artifacts(&self, lock_digest: &str) {
         let runtime = self.project.join(".dembly/runtime");
         fs::create_dir_all(runtime.join("bin")).unwrap();
         let config = RuntimeConfig {
             schema_version: 1,
-            lock_digest: "sha256:state".into(),
+            lock_digest: lock_digest.into(),
             runtime_user: RuntimeUserSpec {
                 spec: "vscode:staff".into(),
             },
@@ -332,6 +408,108 @@ impl Fixture {
         let compose = fs::read_to_string(&self.compose).unwrap();
         assert!(compose.contains(from), "{compose}");
         fs::write(&self.compose, compose.replacen(from, to, 1)).unwrap();
+    }
+
+    fn mutate_managed_field(&self, field: &str) {
+        let source = fs::read_to_string(&self.compose).unwrap();
+        let mut document = serde_yaml::from_str::<Value>(&source).unwrap();
+        let service = document
+            .as_mapping_mut()
+            .unwrap()
+            .get_mut(Value::String("services".into()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap()
+            .get_mut(Value::String("dev".into()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap();
+        match field {
+            "user" => {
+                service.insert(
+                    Value::String("user".into()),
+                    Value::String("altered".into()),
+                );
+            }
+            "privileged" => {
+                service.insert(Value::String("privileged".into()), Value::Bool(false));
+            }
+            "label" => {
+                service
+                    .get_mut(Value::String("labels".into()))
+                    .unwrap()
+                    .as_mapping_mut()
+                    .unwrap()
+                    .insert(
+                        Value::String("io.dembly.lock-digest".into()),
+                        Value::String("sha256:altered".into()),
+                    );
+            }
+            "mount" => {
+                service
+                    .get_mut(Value::String("volumes".into()))
+                    .unwrap()
+                    .as_sequence_mut()
+                    .unwrap()[0] =
+                    Value::String("./runtime/other.toml:/run/dembly/runtime/dev.toml:ro".into());
+            }
+            other => panic!("unknown managed field {other}"),
+        }
+        fs::write(&self.compose, serde_yaml::to_string(&document).unwrap()).unwrap();
+    }
+
+    fn replace_applied_lock_label(&self, digest: &str) {
+        let source = fs::read_to_string(&self.compose).unwrap();
+        let mut document = serde_yaml::from_str::<Value>(&source).unwrap();
+        let root = document.as_mapping_mut().unwrap();
+        let service = root
+            .get_mut(Value::String("services".into()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap()
+            .get_mut(Value::String("dev".into()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap();
+        service
+            .get_mut(Value::String("labels".into()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap()
+            .insert(
+                Value::String("io.dembly.lock-digest".into()),
+                Value::String(digest.into()),
+            );
+        let entry = root
+            .get_mut(Value::String("x-dembly".into()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap()
+            .get_mut(Value::String("state".into()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap()
+            .get_mut(Value::String("fields".into()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap()
+            .get_mut(Value::String("labels".into()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap()
+            .get_mut(Value::String("entries".into()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap()
+            .get_mut(Value::String("io.dembly.lock-digest".into()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap();
+        entry.insert(
+            Value::String("applied".into()),
+            serde_yaml::to_value(ManagedValue::Present(Value::String(digest.into()))).unwrap(),
+        );
+        fs::write(&self.compose, serde_yaml::to_string(&document).unwrap()).unwrap();
     }
 
     fn snapshot(&self) -> BTreeMap<PathBuf, Vec<u8>> {
@@ -405,4 +583,45 @@ fn assert_failure(output: &Output, expected: &str) {
 
 fn text(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+fn canonical_lock_digest(lock: &DemblyLock) -> String {
+    let mut content = b"dembly-lock-v1\0".to_vec();
+    for value in [&lock.compose_path, &lock.service, &lock.image] {
+        append_canonical_field(&mut content, value);
+    }
+    for card in &lock.cards {
+        for value in [
+            &card.name,
+            &card.version,
+            &card.manifest_sha256,
+            &card.filesystem_sha256,
+        ] {
+            append_canonical_field(&mut content, value);
+        }
+    }
+    let mut command = Command::new("sha256sum")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write as _;
+    command.stdin.as_mut().unwrap().write_all(&content).unwrap();
+    let output = command.wait_with_output().unwrap();
+    assert!(output.status.success());
+    format!(
+        "sha256:{}",
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+    )
+}
+
+fn append_canonical_field(content: &mut Vec<u8>, value: &str) {
+    content.extend_from_slice(value.len().to_string().as_bytes());
+    content.push(b':');
+    content.extend_from_slice(value.as_bytes());
+    content.push(0);
 }

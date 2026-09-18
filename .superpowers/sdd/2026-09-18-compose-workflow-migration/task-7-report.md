@@ -73,3 +73,47 @@ fake Dockerのargvも`docker compose -f <managed> config --format json`と`docke
 - Lockのcanonical digest生成とLock更新はTask 8の責務です。Task 7は既存の埋込みLockが現在の解決結果と一致するかだけを判定します。
 - Runtime成果物の生成・更新はTask 9の責務です。Task 7は存在する成果物を読み取り専用で検証します。
 - Card checkの実行はRuntimeの責務です。Host checkはコンテナ生成・起動・exec・Card command実行を行いません。
+
+## Fix round 1/5
+
+### 原因
+
+- `validate`は`HostPlan::resolve`だけで成功しており、保存済み`x-dembly.state`がある場合にも管理fieldの`applied`値と現在のCompose値を照合していませんでした。
+- `check`は現在のLockを返す`require_current_lock`の結果を捨て、`state.lock_digest`とRuntime TOMLの一致だけを検査していました。そのため、Lock更新後に旧stateと旧Runtime成果物が残っていても成功しました。
+- `check`のCard check案内には`-f <compose>`、`--rm`、Runtime binary pathがなく、current directory外のComposeに対して実行できませんでした。
+- `inspect`はDeck rootと次回`apply`の管理field・生成物予定を表示していませんでした。
+
+### 修正
+
+- `validate`はstateが存在する場合に`ManagedCompose::validate_applied_state`を実行します。entrypoint、command、user、privileged、label、mountの全管理field競合が失敗になります。
+- `check`は埋込みLockを長さ区切りのcanonical bytesとしてSHA-256化し、現在digestを`state.lock_digest`、`io.dembly.lock-digest`の保存済み適用値、Runtime TOMLの3箇所と照合します。
+- Card check案内を、解決済みCompose列の絶対`-f`指定、`run --rm`、`/run/dembly/bin/dembly __runtime check`を含むshell実行可能なコマンドへ変更しました。
+- `inspect`にDeck root、次回applyのentrypoint/command/user/privileged/label、およびRuntime TOMLとRuntime binaryの出力先を追加しました。
+
+### RED
+
+```text
+cargo test -p dembly-cli --test host_commands
+4 failed
+
+validate ... stdout=valid: ...
+check ... stdout=host integrity: valid
+inspect ... expected Deck root/next apply output was absent
+check ... native command lacked -f, --rm, and Runtime binary path
+```
+
+managed label世代の単独回帰は、label比較を一時的に除いた状態で次の失敗を確認しました。
+
+```text
+check_rejects_a_managed_lock_label_from_a_previous_generation_without_writing_project_files ... FAILED
+stdout=host integrity: valid
+```
+
+### GREEN
+
+```text
+cargo test -p dembly-cli --test host_commands
+12 passed; 0 failed
+```
+
+追加テストはuser、privileged、Dembly label、managed mountの外部変更を`validate`が拒否すること、Lock更新後の旧state/Runtime、旧managed labelを`check`が拒否すること、Compose pathを明示したCard check案内を検証します。
