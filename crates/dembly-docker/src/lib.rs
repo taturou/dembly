@@ -3,6 +3,7 @@
 mod client;
 mod compose;
 mod compose_config;
+mod devcontainer;
 mod image;
 
 pub use client::{
@@ -13,4 +14,8 @@ pub use client::{
 };
 pub use compose::{compose_override, ComposeRuntimePlan};
 pub use compose_config::ComposeServiceConfig;
+pub use devcontainer::{
+    load_devcontainer, validate_devcontainer, DevContainerCommand, DevContainerCommandArguments,
+    DevContainerDocument,
+};
 pub use image::{image_create_command, CardFileBind, ImageRuntimePlan};
