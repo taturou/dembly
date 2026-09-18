@@ -350,7 +350,7 @@ fn resolve_card_path(root: &Path, value: &str) -> Result<PathBuf, CoreError> {
     }
 }
 
-fn resolve_compose_path(root: &Path, value: &str) -> Result<PathBuf, CoreError> {
+pub fn resolve_compose_path(root: &Path, value: &str) -> Result<PathBuf, CoreError> {
     let expanded = expand_deck_root(value, root)?;
     let path = if expanded.is_absolute() {
         expanded

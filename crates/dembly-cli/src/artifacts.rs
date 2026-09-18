@@ -286,14 +286,23 @@ fn render_gitignore(current: &[u8]) -> Result<Vec<u8>, CliError> {
     let source =
         std::str::from_utf8(current).map_err(|_| CliError::new(".gitignore must be UTF-8"))?;
     let required = ["/.dembly/runtime/", "/.dembly/volumes/"];
-    let mut lines = source
-        .lines()
-        .filter(|line| !required.contains(line))
-        .map(str::to_owned)
+    let present = source.lines().collect::<std::collections::BTreeSet<_>>();
+    let missing = required
+        .into_iter()
+        .filter(|rule| !present.contains(rule))
         .collect::<Vec<_>>();
-    lines.extend(required.into_iter().map(str::to_owned));
-    let mut output = lines.join("\n").into_bytes();
-    output.push(b'\n');
+    if missing.is_empty() {
+        return Ok(current.to_vec());
+    }
+
+    let mut output = current.to_vec();
+    if !output.is_empty() && !output.ends_with(b"\n") {
+        output.push(b'\n');
+    }
+    for rule in missing {
+        output.extend_from_slice(rule.as_bytes());
+        output.push(b'\n');
+    }
     Ok(output)
 }
 

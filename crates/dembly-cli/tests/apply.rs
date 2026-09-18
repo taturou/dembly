@@ -1,10 +1,13 @@
+use dembly_docker::ManagedCompose;
 use dembly_runtime::load_runtime_config;
 use serde_yaml::Value;
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::SystemTime;
 
 static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
@@ -51,10 +54,28 @@ fn apply_stages_runtime_artifacts_and_updates_only_the_selected_service() {
     let document: Value = serde_yaml::from_slice(&fs::read(&fixture.compose).unwrap()).unwrap();
     let services = document["services"].as_mapping().unwrap();
     let dev = services["dev"].as_mapping().unwrap();
-    assert_eq!(dev["entrypoint"].as_sequence().unwrap().len(), 4);
+    assert_eq!(
+        dev["entrypoint"],
+        Value::Sequence(vec![
+            Value::String("/run/dembly/bin/dembly".into()),
+            Value::String("__runtime".into()),
+            Value::String("init".into()),
+            Value::String("/run/dembly/runtime/dev.toml".into()),
+        ])
+    );
     assert_eq!(dev["command"], Value::Sequence(Vec::new()));
     assert_eq!(dev["user"], Value::String("root".into()));
     assert_eq!(dev["privileged"], Value::Bool(true));
+    let digest = ManagedCompose::read(&fixture.compose)
+        .unwrap()
+        .lock()
+        .unwrap()
+        .unwrap()
+        .digest();
+    assert_eq!(
+        dev["labels"]["io.dembly.lock-digest"],
+        Value::String(digest)
+    );
     assert_eq!(dev["environment"]["USER_FIELD"], "retained");
     assert_eq!(services["other"]["command"], "untouched");
     let mounts = dev["volumes"].as_sequence().unwrap();
@@ -107,21 +128,122 @@ fn apply_requires_a_fresh_lock_before_writing_and_reapply_is_stable() {
 
 #[test]
 fn apply_rejects_external_managed_field_edits_without_artifact_writes() {
+    for field in [
+        "entrypoint",
+        "command",
+        "user",
+        "privileged",
+        "label",
+        "mount",
+    ] {
+        let fixture = Fixture::new();
+        fixture.lock();
+        assert_success(&fixture.run("apply"));
+        fixture.seed_volume_contents();
+        fixture.mutate_managed_field(field);
+        let before = fixture.artifact_snapshot();
+
+        let output = fixture.run("apply");
+
+        assert_failure(&output, "conflicts");
+        assert_eq!(
+            fixture.artifact_snapshot(),
+            before,
+            "conflict in {field} must not write any artifact"
+        );
+    }
+}
+
+#[test]
+fn artifact_generation_failure_keeps_the_applied_compose_and_all_artifacts() {
     let fixture = Fixture::new();
     fixture.lock();
     assert_success(&fixture.run("apply"));
-    fixture.replace_compose("user: root", "user: external");
-    let before_compose = fs::read(&fixture.compose).unwrap();
-    let before_runtime = fs::read(fixture.deck_root.join("runtime/dev.toml")).unwrap();
+    fixture.seed_volume_contents();
+    fs::write(fixture.project.join(".gitignore"), [0xff, 0xfe]).unwrap();
+    let before = fixture.artifact_snapshot();
 
     let output = fixture.run("apply");
 
-    assert_failure(&output, "field user conflicts");
-    assert_eq!(fs::read(&fixture.compose).unwrap(), before_compose);
+    assert_failure(&output, ".gitignore must be UTF-8");
+    assert_eq!(fixture.artifact_snapshot(), before);
+}
+
+#[test]
+fn apply_rejects_runtime_and_volume_symlinks_without_changing_compose() {
+    for target in ["runtime", "volumes/cache"] {
+        let fixture = Fixture::new();
+        fixture.lock();
+        let outside = fixture
+            .root
+            .join(format!("outside-{}", target.replace('/', "-")));
+        fs::create_dir_all(&outside).unwrap();
+        let path = fixture.deck_root.join(target);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&outside, &path).unwrap();
+        let compose = fs::read(&fixture.compose).unwrap();
+
+        let output = fixture.run("apply");
+
+        assert_failure(&output, "symlink");
+        assert_eq!(fs::read(&fixture.compose).unwrap(), compose);
+        assert!(fs::read_dir(&outside).unwrap().next().is_none());
+    }
+}
+
+#[test]
+fn apply_appends_only_missing_ignore_rules_without_reordering_existing_lines() {
+    let fixture = Fixture::new();
+    let original = b"alpha\n/.dembly/volumes/\n!/.dembly/volumes/keep\nomega";
+    fs::write(fixture.project.join(".gitignore"), original).unwrap();
+    fixture.lock();
+
+    assert_success(&fixture.run("apply"));
+
+    let mut expected = original.to_vec();
+    expected.extend_from_slice(b"\n/.dembly/runtime/\n");
     assert_eq!(
-        fs::read(fixture.deck_root.join("runtime/dev.toml")).unwrap(),
-        before_runtime
+        fs::read(fixture.project.join(".gitignore")).unwrap(),
+        expected
     );
+}
+
+#[test]
+fn apply_replaces_artifacts_in_runtime_binary_volume_ignore_compose_order() {
+    let fixture = Fixture::new();
+    fixture.lock();
+
+    assert_success(&fixture.run("apply"));
+
+    let modified = [
+        fs::metadata(fixture.deck_root.join("runtime/dev.toml"))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        fs::metadata(fixture.deck_root.join("runtime/bin/dembly"))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        fs::metadata(fixture.deck_root.join("volumes/cache"))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        fs::metadata(fixture.project.join(".gitignore"))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        fs::metadata(&fixture.compose).unwrap().modified().unwrap(),
+    ];
+    assert!(
+        modified.windows(2).all(|pair| pair[0] <= pair[1]),
+        "replacement mtimes were not ordered: {modified:?}"
+    );
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ArtifactSnapshot {
+    files: BTreeMap<PathBuf, (Vec<u8>, SystemTime)>,
+    directories: BTreeMap<PathBuf, (Vec<String>, SystemTime)>,
 }
 
 struct Fixture {
@@ -233,10 +355,93 @@ impl Fixture {
         fs::write(&self.card, source.replacen(from, to, 1)).unwrap();
     }
 
-    fn replace_compose(&self, from: &str, to: &str) {
-        let source = fs::read_to_string(&self.compose).unwrap();
-        assert!(source.contains(from), "{source}");
-        fs::write(&self.compose, source.replacen(from, to, 1)).unwrap();
+    fn seed_volume_contents(&self) {
+        for directory in [
+            self.deck_root.join("volumes/cache"),
+            self.deck_root.join("volumes/tool/private"),
+            self.deck_root.join("volumes/shared"),
+        ] {
+            fs::write(directory.join("marker"), directory.display().to_string()).unwrap();
+        }
+    }
+
+    fn mutate_managed_field(&self, field: &str) {
+        let mut document: Value =
+            serde_yaml::from_slice(&fs::read(&self.compose).unwrap()).unwrap();
+        let service = document["services"]["dev"].as_mapping_mut().unwrap();
+        match field {
+            "entrypoint" => {
+                service.insert(
+                    Value::String("entrypoint".into()),
+                    Value::Sequence(vec![Value::String("/external".into())]),
+                );
+            }
+            "command" => {
+                service.insert(
+                    Value::String("command".into()),
+                    Value::Sequence(vec![Value::String("external".into())]),
+                );
+            }
+            "user" => {
+                service.insert(
+                    Value::String("user".into()),
+                    Value::String("external".into()),
+                );
+            }
+            "privileged" => {
+                service.insert(Value::String("privileged".into()), Value::Bool(false));
+            }
+            "label" => {
+                service["labels"].as_mapping_mut().unwrap().insert(
+                    Value::String("io.dembly.lock-digest".into()),
+                    Value::String("sha256:external".into()),
+                );
+            }
+            "mount" => {
+                service["volumes"].as_sequence_mut().unwrap()[0] =
+                    Value::String("./external:/run/dembly/bin/dembly:ro".into());
+            }
+            _ => unreachable!(),
+        }
+        fs::write(&self.compose, serde_yaml::to_string(&document).unwrap()).unwrap();
+    }
+
+    fn artifact_snapshot(&self) -> ArtifactSnapshot {
+        let files = [
+            self.compose.clone(),
+            self.deck_root.join("runtime/dev.toml"),
+            self.deck_root.join("runtime/bin/dembly"),
+            self.project.join(".gitignore"),
+            self.deck_root.join("volumes/cache/marker"),
+            self.deck_root.join("volumes/tool/private/marker"),
+            self.deck_root.join("volumes/shared/marker"),
+        ]
+        .into_iter()
+        .map(|path| {
+            let metadata = fs::metadata(&path).unwrap();
+            (
+                path.clone(),
+                (fs::read(&path).unwrap(), metadata.modified().unwrap()),
+            )
+        })
+        .collect();
+        let directories = [
+            self.deck_root.join("volumes/cache"),
+            self.deck_root.join("volumes/tool/private"),
+            self.deck_root.join("volumes/shared"),
+        ]
+        .into_iter()
+        .map(|path| {
+            let mut entries = fs::read_dir(&path)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            entries.sort();
+            let modified = fs::metadata(&path).unwrap().modified().unwrap();
+            (path, (entries, modified))
+        })
+        .collect();
+        ArtifactSnapshot { files, directories }
     }
 }
 

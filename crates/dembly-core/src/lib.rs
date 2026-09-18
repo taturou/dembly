@@ -23,4 +23,6 @@ pub use planning::{
     validate_mount_targets, validate_shared_volume_consistency, CardEnvironment, HostVariables,
     MountResource, VolumeOwner,
 };
-pub use resolution::{resolve_deck, ResolvedBind, ResolvedCard, ResolvedDeck, ResolvedVolume};
+pub use resolution::{
+    resolve_compose_path, resolve_deck, ResolvedBind, ResolvedCard, ResolvedDeck, ResolvedVolume,
+};

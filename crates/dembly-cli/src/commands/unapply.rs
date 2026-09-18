@@ -1,8 +1,9 @@
 use dembly_cli::{CliError, HostContext};
+use dembly_core::resolve_compose_path;
 use dembly_docker::{atomic_replace, ManagedCompose};
 use std::fs;
 use std::io::Write;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError> {
     let config_path = context.config_path.canonicalize().map_err(|error| {
@@ -16,7 +17,8 @@ pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError
         .ok_or_else(|| CliError::new("config.toml has no parent directory"))?;
     let config =
         dembly_core::load_config(&config_path).map_err(|error| CliError::new(error.to_string()))?;
-    let compose_path = resolve_compose_path(deck_root, &config.compose.path)?;
+    let compose_path = resolve_compose_path(deck_root, &config.compose.path)
+        .map_err(|error| CliError::new(error.to_string()))?;
     let runtime_path = deck_root.join("runtime");
 
     let mut compose = ManagedCompose::read(&compose_path).map_err(CliError::new)?;
@@ -40,38 +42,6 @@ pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError
 
     writeln!(output, "unapplied: {}", compose_path.display())
         .map_err(|error| CliError::new(format!("cannot write unapply result: {error}")))
-}
-
-fn resolve_compose_path(root: &Path, configured: &str) -> Result<PathBuf, CliError> {
-    let expanded = configured.replace("${DECK_ROOT}", &root.to_string_lossy());
-    if expanded.contains('$') {
-        return Err(CliError::new(format!(
-            "unsupported variable in Compose path: {configured}"
-        )));
-    }
-    let configured = PathBuf::from(expanded);
-    let path = if configured.is_absolute() {
-        configured
-    } else {
-        root.join(configured)
-    };
-    Ok(normalize_path(path))
-}
-
-fn normalize_path(path: PathBuf) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-            Component::RootDir => normalized.push(Path::new("/")),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Normal(component) => normalized.push(component),
-        }
-    }
-    normalized
 }
 
 fn validate_runtime_path(root: &Path, runtime: &Path) -> Result<(), CliError> {

@@ -57,6 +57,22 @@ fn unapply_conflict_preserves_compose_and_runtime() {
     assert!(fixture.deck_root.join("runtime/dev.toml").is_file());
 }
 
+#[test]
+fn unapply_resolves_deck_root_variable_when_the_root_contains_a_dollar() {
+    let fixture = Fixture::new().move_project_to_dollar_path();
+    fs::write(
+        fixture.deck_root.join("config.toml"),
+        "schema_version = 1\n[compose]\npath = \"${DECK_ROOT}/../compose.yaml\"\nservice = \"dev\"\n[[cards]]\npath = \"cards/tool/card.toml\"\n",
+    )
+    .unwrap();
+    fixture.lock_apply();
+
+    let output = fixture.run("unapply");
+
+    assert_success(&output);
+    assert!(!fixture.deck_root.join("runtime").exists());
+}
+
 struct Fixture {
     root: PathBuf,
     project: PathBuf,
@@ -163,6 +179,16 @@ impl Fixture {
         let source = fs::read_to_string(&self.compose).unwrap();
         assert!(source.contains(from), "{source}");
         fs::write(&self.compose, source.replacen(from, to, 1)).unwrap();
+    }
+
+    fn move_project_to_dollar_path(mut self) -> Self {
+        let project = self.root.join("$project");
+        fs::rename(&self.project, &project).unwrap();
+        self.project = project;
+        self.deck_root = self.project.join(".dembly");
+        self.compose = self.project.join("compose.yaml");
+        self.ignore = self.project.join(".gitignore");
+        self
     }
 }
 
