@@ -122,3 +122,20 @@ fn excludes_symlinked_directories_and_candidate_files() {
     assert!(candidates.cards.is_empty());
     assert!(candidates.devcontainers.is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn excludes_cards_when_a_fixed_root_parent_is_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let cwd = temporary_directory("symlinked-root-parent");
+    write(
+        &cwd.join("target-dembly/cards/hidden/card.toml"),
+        &card("hidden"),
+    );
+    symlink(cwd.join("target-dembly"), cwd.join(".dembly")).unwrap();
+
+    let candidates = discover_init_candidates(&cwd).unwrap();
+
+    assert!(candidates.cards.is_empty());
+}

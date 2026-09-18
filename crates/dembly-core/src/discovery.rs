@@ -38,7 +38,7 @@ pub fn discover_init_candidates(cwd: &Path) -> Result<InitCandidates, CoreError>
     let mut cards = Vec::new();
     for root in [".dembly/cards", ".dembly-cards", ".cards", "cards"] {
         let root_path = cwd.join(root);
-        let Some(entries) = direct_directory_entries(&root_path)? else {
+        let Some(entries) = fixed_directory_entries(cwd, Path::new(root))? else {
             continue;
         };
         for entry in entries {
@@ -69,7 +69,7 @@ pub fn discover_init_candidates(cwd: &Path) -> Result<InitCandidates, CoreError>
     }
 
     let directory = cwd.join(".devcontainer");
-    if let Some(entries) = direct_directory_entries(&directory)? {
+    if let Some(entries) = fixed_directory_entries(cwd, Path::new(".devcontainer"))? {
         let direct = directory.join("devcontainer.json");
         if is_regular_file(&direct)? {
             devcontainers.push(relative_display_path(cwd, &direct));
@@ -98,23 +98,20 @@ pub fn discover_init_candidates(cwd: &Path) -> Result<InitCandidates, CoreError>
     })
 }
 
-fn direct_directory_entries(path: &Path) -> Result<Option<fs::ReadDir>, CoreError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_dir() => {
-            fs::read_dir(path)
-                .map(Some)
-                .map_err(|source| CoreError::Io {
-                    path: path.into(),
-                    source,
-                })
+fn fixed_directory_entries(cwd: &Path, root: &Path) -> Result<Option<fs::ReadDir>, CoreError> {
+    let mut path = cwd.to_path_buf();
+    for component in root.components() {
+        path.push(component.as_os_str());
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => return Ok(None),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(CoreError::Io { path, source }),
         }
-        Ok(_) => Ok(None),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(CoreError::Io {
-            path: path.into(),
-            source,
-        }),
     }
+    fs::read_dir(&path)
+        .map(Some)
+        .map_err(|source| CoreError::Io { path, source })
 }
 
 fn is_regular_directory(path: &Path) -> Result<bool, CoreError> {
