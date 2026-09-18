@@ -9,7 +9,7 @@ mod parse;
 mod planning;
 mod resolution;
 
-pub use checksum::{sha256_file, verify_card_filesystem};
+pub use checksum::{sha256_bytes, sha256_file, verify_card_filesystem};
 pub use discovery::{discover_config, discover_init_candidates, CardCandidate, InitCandidates};
 pub use error::CoreError;
 pub use identity::{CardIdentity, LockInput};

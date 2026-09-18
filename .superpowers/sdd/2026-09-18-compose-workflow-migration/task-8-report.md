@@ -11,6 +11,7 @@ Compose全体のhashと独立した`deck.lock`は生成しません。
 ## 実装内容
 
 - `LockInput::digest()`はdomain prefixと長さ区切りfieldからSHA-256を計算します。
+- SHA-256のbytes実装は`checksum.rs`へ集約し、Lock identityから再利用します。
 - Cardは`.dembly/config.toml`の宣言順を維持し、構造体やmapの直列化順には依存しません。
 - Lockは正規化済みCompose path、対象service、不変image ID、Card名、version、manifest checksum、検証済みfilesystem checksumを保持します。
 - `ManagedCompose`の埋込みLock型はCoreのidentity型を使用します。
@@ -85,3 +86,36 @@ Card filesystemは従来の`sha256_file`で検証し、検証済みの宣言値�
 
 - `design/spec.md` 7.5.1、9.4、11.2、11.3、14
 - `design/superpowers/plans/2026-09-18-compose-workflow-migration.md` Task 8
+
+## Fix round 1/5
+
+### 原因
+
+初回実装はSHA-256の定数、padding、compressionを`identity.rs`へ直接置いていました。
+
+この配置はchecksum責務を分散させ、planの既存SHA-256実装を再利用する条件に違反していました。
+
+### RED
+
+canonical Lock bytesを共通bytes checksum APIへ渡し、`LockInput::digest()`と一致することを要求するtestを追加しました。
+
+```text
+cargo test --offline -p dembly-core --test identity
+error[E0432]: unresolved import `dembly_core::sha256_bytes`
+```
+
+### 修正
+
+- SHA-256の定数、padding、compression、hex化を`checksum.rs::sha256_bytes`へ移しました。
+- `identity.rs`はcanonical bytesの組立てだけを担当し、共通bytes checksum APIを呼び出します。
+- `sha256_file`の外部`sha256sum`実行と失敗処理、および`LockInput::digest() -> String`の契約は維持しました。
+
+### GREEN
+
+```text
+cargo test --offline -p dembly-core --test identity
+5 passed; 0 failed
+
+cargo test --offline -p dembly-cli --test lock
+2 passed; 0 failed
+```

@@ -1,4 +1,4 @@
-use dembly_core::{CardIdentity, LockInput};
+use dembly_core::{sha256_bytes, CardIdentity, LockInput};
 
 fn lock(cards: Vec<CardIdentity>) -> LockInput {
     LockInput {
@@ -75,6 +75,26 @@ fn digest_changes_with_manifest_or_verified_filesystem_identity() {
     assert_eq!(
         original.digest(),
         "sha256:a5ed02ded110315527b40780c269c38c36b0a26d45cea8689d4141c2634375af"
+    );
+}
+
+#[test]
+fn digest_uses_the_shared_byte_checksum() {
+    let canonical = concat!(
+        "dembly-lock-v1\0",
+        "26:/work/project/compose.yaml\0",
+        "3:dev\0",
+        "12:sha256:image\0",
+        "4:tool\0",
+        "1:1\0",
+        "12:manifest-one\0",
+        "14:filesystem-one\0",
+    );
+    let input = lock(vec![card("tool", "manifest-one", "filesystem-one")]);
+
+    assert_eq!(
+        input.digest(),
+        format!("sha256:{}", sha256_bytes(canonical.as_bytes()))
     );
 }
 
