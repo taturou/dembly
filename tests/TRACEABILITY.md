@@ -4,7 +4,7 @@
 
 ## 14節の受入条件
 
-| ID | 受入条件 | 自動化された証拠 |
+| ID | 受入条件 | 自動化された証拠または手動検証 |
 | --- | --- | --- |
 | AC-14-01 | `init` が人間の選択を経て `.dembly/config.toml` を生成する | `one_card_candidate_requires_an_explicit_adoption_confirmation`、`selected_devcontainer_shows_service_and_compose_sequence_before_confirmation`、`no_devcontainer_prompts_for_compose_path_and_service` |
 | AC-14-02 | `init` が固定した Card と Dev Containers の探索位置だけを対象とし、深い階層と symlink を除外する | `discovers_only_direct_regular_files_in_fixed_roots_in_lexical_order`、`excludes_symlinked_directories_and_candidate_files`、`excludes_cards_when_a_fixed_root_parent_is_a_symlink` |
@@ -18,7 +18,7 @@
 | AC-14-10 | Card 変更が基礎 image の再 build なしで Compose container の再作成へ反映される | `native_compose_owns_applied_runtime_lifecycle` |
 | AC-14-11 | SquashFS mount が Runtime の mount namespace だけに存在する | `native_compose_owns_applied_runtime_lifecycle`、`card_mount_command_is_always_read_only` |
 | AC-14-12 | Runtime Dembly と post-mount hook が root で動作する | `init_runs_root_setup_in_strict_order_before_intended_user_exec`、`non_root_init_stops_before_plan_or_account_reads_and_mounts`、`native_compose_owns_applied_runtime_lifecycle` |
-| AC-14-13 | 元の process、Compose `run` command、Dev Containers 接続 process が指定利用者で動作する | `init_uses_saved_argv_by_default_and_replaces_it_with_compose_run_argv`、`native_compose_owns_applied_runtime_lifecycle` と同 test 内の `devcontainer read-configuration` assertion |
+| AC-14-13 | 元の process、Compose `run` command、Dev Containers 接続 process が指定利用者で動作する | 元の process と Compose `run` command は `init_uses_saved_argv_by_default_and_replaces_it_with_compose_run_argv`、`native_compose_owns_applied_runtime_lifecycle` で自動検証し、Dev Containers 接続 process は下記の Dev Containers CLI 手動検証で確認する |
 | AC-14-14 | native Compose の `ps`、`logs`、`exec`、`run`、`down` が同じ project へ作用する | `native_compose_owns_applied_runtime_lifecycle` |
 | AC-14-15 | AI の native Compose 運用と人間の Dev Containers 運用が同じ Compose file、Dockerfile、Card を使用する | `native_compose_owns_applied_runtime_lifecycle` と同 test 内の Compose file order、service、user assertion |
 | AC-14-16 | Runtime 初期化または Card check の失敗が非ゼロになる | `setup_failure_names_the_operation_and_target_and_prevents_drop_and_exec`、`check_failure_names_card_and_path_and_stops_later_checks`、`native_compose_owns_applied_runtime_lifecycle` |
@@ -45,5 +45,17 @@
 `native_compose_owns_applied_runtime_lifecycle` には、root または Docker daemon を利用できる権限、privileged container の起動能力、loop device、kernel SquashFS support、`mksquashfs`、musl target が必要です。
 
 同 test の Dev Containers 設定検証には `devcontainer` CLI が必要であり、未導入環境ではこの任意 integration の検証前提を満たしません。
+
+AC-14-13 の Dev Containers 接続 process は、`devcontainer up` で対象環境を起動し、`devcontainer exec` が返す user 名と UID を `remoteUser` および Runtime の指定利用者と照合します。
+
+```sh
+devcontainer up --workspace-folder <project-root> \
+  --config <project-root>/.devcontainer/devcontainer.json
+devcontainer exec --workspace-folder <project-root> \
+  --config <project-root>/.devcontainer/devcontainer.json \
+  sh -c 'id -un; id -u'
+```
+
+この手動検証には `devcontainer` CLI、Docker Engine、Docker Compose plugin、privileged container、loop device、kernel SquashFS support が必要です。
 
 Host mount namespace に Runtime の Card mount が現れないこと、Compose project label がトップレベル `name` と一致すること、Card 更新後に container ID が変わって image ID が変わらないことは、`native_compose_owns_applied_runtime_lifecycle` が対応する環境上で検証します。

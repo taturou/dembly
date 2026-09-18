@@ -122,3 +122,79 @@ legacy scan は `README.md`、`README-ja.md`、`examples`、`crates`、`tests`�
 - Card mount、hook、check、非 root process の end-to-end 契約は、同じ native Compose command 列を使う acceptance test が実 Card で検証します。
 - Host 初期化 script は Lock を自動更新しないため、初回または入力変更後に利用者の明示的な `lock` が必要です。
 - この明示操作により、`lock` だけが不変 identity を更新する所有権を維持します。
+
+## Fix round 1/5
+
+### runnable workflow の順序
+
+`examples/compose-base/README.md` だけが `pull` を `apply` 後に記載していました。
+
+tracked 例の command 列を `pull`、`validate`、`lock`、`apply`、native Compose lifecycle、`down`、`unapply` の順へ修正しました。
+
+英語版と日本語版の quickstart は、すでに `pull`、`init`、`validate`、`lock`、`apply` の順であり、その順序を維持しました。
+
+本 report の「実行可能な例の検証」は tracked 例と同じ `pull`、`validate`、`lock`、`apply` の順です。
+
+### 文書検査の RED と GREEN
+
+`scripts/test-documentation.sh` に command 行の順序検査を先に追加しました。
+
+最初の実行では prose 中の `dembly init` を command と誤認したため、完全一致する command 行だけを対象に修正しました。
+
+再実行では、tracked 例の `validate` が `pull` より前にあることを理由として RED を確認しました。
+
+```text
+workflow command out of order in examples/compose-base/README.md at line 13: dembly validate
+```
+
+tracked 例の command 順序を修正した後、GREEN を確認しました。
+
+```text
+documentation assertions passed
+```
+
+### Dev Containers 接続 process
+
+従来の AC-14-13 は `devcontainer read-configuration` を接続 process の実行 user の証拠としていましたが、この command が証明するのは設定上の `remoteUser` だけです。
+
+元の process と Compose `run` command の自動証拠は維持し、Dev Containers 接続 process は `devcontainer up` 後の `devcontainer exec` で user 名と UID を確認する手動検証へ分離しました。
+
+この検証には Dev Containers CLI と Runtime 起動に必要な Linux 環境を要求します。
+
+tracked 例の一時 copy に対して手動 gate を実行し、接続 process の実 user を確認しました。
+
+```text
+devcontainer up --workspace-folder <temporary-example> --config <temporary-example>/.devcontainer/devcontainer.json
+outcome: success
+remoteUser: root
+
+devcontainer exec --workspace-folder <temporary-example> --config <temporary-example>/.devcontainer/devcontainer.json sh -c 'id -un; id -u'
+remote-user=root uid=0
+```
+
+永続 integration test へ `devcontainer up` を追加すると、任意の Dev Containers CLI と外部 manifest 取得を workspace suite の必須依存にするため、AC-14-13 では明示的な手動 gate としました。
+
+### Fix round 1 検証
+
+```text
+bash -n scripts/test-documentation.sh
+exit 0
+
+bash scripts/test-documentation.sh
+documentation assertions passed
+
+cargo fmt --all -- --check
+exit 0
+
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+exit 0
+
+cargo test --workspace
+122 passed; 0 failed
+
+git diff --check
+exit 0
+
+git diff --exit-code -- design/spec.md
+exit 0
+```

@@ -37,6 +37,27 @@ reject() {
     fi
 }
 
+require_ordered_commands() {
+    local file=$1
+    shift
+    local previous_line=0
+    local command line
+
+    for command in "$@"; do
+        line=$(grep -Fnxm1 -- "$command" "$file" | cut -d: -f1 || true)
+        if [[ -z "$line" ]]; then
+            printf 'missing workflow command in %s: %s\n' "$file" "$command" >&2
+            exit 1
+        fi
+        if ((line <= previous_line)); then
+            printf 'workflow command out of order in %s at line %d: %s\n' \
+                "$file" "$line" "$command" >&2
+            exit 1
+        fi
+        previous_line=$line
+    done
+}
+
 require_exact_h2_sequence() {
     local -a expected=(
         '## Language'
@@ -199,6 +220,7 @@ reject "$readme" 'implementation in progress'
 reject "$compose_readme" 'implementation in progress'
 
 require "$compose_readme" 'dembly validate'
+require "$compose_readme" 'docker compose -f compose.yaml pull'
 require "$compose_readme" 'dembly lock'
 require "$compose_readme" 'dembly apply'
 require "$compose_readme" 'docker compose -f compose.yaml up -d'
@@ -220,6 +242,39 @@ require "$devcontainer_file" '"initializeCommand": ".devcontainer/initialize-hos
 require "$initialize_host" 'dembly validate'
 require "$initialize_host" 'dembly apply'
 require "$initialize_host" 'dembly lock'
+
+for public_readme in "$readme" "$japanese_readme"; do
+    require_ordered_commands "$public_readme" \
+        'docker compose -f compose.yaml pull' \
+        'dembly init' \
+        'dembly validate' \
+        'dembly lock' \
+        'dembly apply' \
+        'docker compose -f compose.yaml up -d' \
+        'docker compose -f compose.yaml ps' \
+        'docker compose -f compose.yaml logs dev' \
+        'docker compose -f compose.yaml exec --user root dev /bin/echo compose-runtime' \
+        'docker compose -f compose.yaml run --rm dev /bin/echo compose-run' \
+        'dembly check' \
+        '  /run/dembly/bin/dembly __runtime check /run/dembly/runtime/dev.toml' \
+        'docker compose -f compose.yaml down' \
+        'dembly unapply'
+done
+
+require_ordered_commands "$compose_readme" \
+    'docker compose -f compose.yaml pull' \
+    'dembly validate' \
+    'dembly lock' \
+    'dembly apply' \
+    'docker compose -f compose.yaml up -d' \
+    'docker compose -f compose.yaml ps' \
+    'docker compose -f compose.yaml logs dev' \
+    'docker compose -f compose.yaml exec --user root dev /bin/echo compose-runtime' \
+    'docker compose -f compose.yaml run --rm dev /bin/echo compose-run' \
+    'dembly check' \
+    '  /run/dembly/bin/dembly __runtime check /run/dembly/runtime/dev.toml' \
+    'docker compose -f compose.yaml down' \
+    'dembly unapply'
 
 for public_doc in "$readme" "$japanese_readme" "$compose_readme"; do
     reject "$public_doc" 'deck\.toml|deck\.lock|dembly (up|down|run|exec)([^[:alnum:]_]|$)|Image Base|image-base|compose\.override'

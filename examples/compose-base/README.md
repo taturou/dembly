@@ -10,11 +10,11 @@ When adding Dembly to another project, run `dembly init`, review the generated c
 Run the example from this directory after installing Dembly:
 
 ```sh
+docker compose -f compose.yaml pull
 dembly validate
 dembly lock
 dembly apply
 
-docker compose -f compose.yaml pull
 docker compose -f compose.yaml up -d
 docker compose -f compose.yaml ps
 docker compose -f compose.yaml logs dev
