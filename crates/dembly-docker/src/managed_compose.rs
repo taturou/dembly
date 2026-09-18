@@ -268,6 +268,35 @@ impl ManagedCompose {
             .and_then(|extension| extension.state.as_option().cloned()))
     }
 
+    /// Verify that the selected service still contains every value recorded by
+    /// the most recent Dembly apply operation. This is read-only and is shared
+    /// by commands that need to reject externally edited managed fields.
+    pub fn validate_applied_state(&self, service_name: &str) -> Result<(), Conflict> {
+        let state = self
+            .state()
+            .map_err(|error| structural_conflict(service_name, X_DEMBLY, error))?
+            .ok_or_else(|| {
+                Conflict::new(
+                    service_name,
+                    "state",
+                    ManagedValue::Present(string("applied state")),
+                    ManagedValue::Missing,
+                )
+            })?;
+        if state.service != service_name {
+            return Err(Conflict::new(
+                service_name,
+                "state.service",
+                ManagedValue::Present(string(service_name)),
+                ManagedValue::Present(string(&state.service)),
+            ));
+        }
+        let service = self
+            .service_mapping(service_name)
+            .map_err(|error| structural_conflict(service_name, "service", error))?;
+        validate_applied_state(service_name, service, &state)
+    }
+
     pub fn set_lock(&mut self, lock: DemblyLock) -> Result<(), String> {
         let mut extension = self.extension()?.unwrap_or_else(DemblyExtension::empty);
         extension.lock = EmbeddedValue::Value(lock);

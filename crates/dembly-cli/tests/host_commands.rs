@@ -1,0 +1,408 @@
+use dembly_core::sha256_file;
+use dembly_docker::{DemblyLock, ManagedCompose, ManagedFields};
+use dembly_runtime::{render_runtime_config, RuntimeCard, RuntimeConfig, RuntimeUserSpec};
+use serde_yaml::Value;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn validate_resolves_explicit_config_without_writing_project_files() {
+    let fixture = Fixture::new();
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["validate", "--config", ".dembly/config.toml"]);
+
+    assert_success(&output);
+    assert!(text(&output.stdout).contains("valid:"));
+    assert_eq!(fixture.snapshot(), before);
+    fixture.assert_read_only_docker_calls();
+}
+
+#[test]
+fn validate_reports_a_missing_config_without_writing_project_files() {
+    let fixture = Fixture::new();
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["validate", "--config", "missing.toml"]);
+
+    assert_failure(&output, "cannot resolve config path");
+    assert_eq!(fixture.snapshot(), before);
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
+fn validate_warns_about_an_optional_missing_bind_without_writing_project_files() {
+    let fixture = Fixture::new();
+    fixture.add_optional_missing_bind();
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["validate"]);
+
+    assert_success(&output);
+    assert!(text(&output.stderr).contains("optional Host Bind"));
+    assert_eq!(fixture.snapshot(), before);
+    fixture.assert_read_only_docker_calls();
+}
+
+#[test]
+fn inspect_renders_the_resolved_host_state_without_writing_project_files() {
+    let fixture = Fixture::new();
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["inspect"]);
+
+    assert_success(&output);
+    assert_eq!(
+        text(&output.stdout),
+        format!(
+            "config: {}\ncompose:\n  project: fixture\n  path: {}\n  service: dev\nuser: vscode:staff\ncards:\n  - tool 1\n    manifest: {}\n    filesystem: {}\n    mount: /opt/tool\nmounts:\n  - card:tool -> /opt/tool\nenvironment:\n  CARD=enabled\n  COMPOSE=only\n  MODE=deck\n  PATH=/opt/tool/bin:/deck/bin:/usr/bin\nlock: missing\napply: not applied\nconflicts: none\n",
+            fixture.config.display(),
+            fixture.compose.display(),
+            fixture.card_manifest.display(),
+            fixture.filesystem.display(),
+        )
+    );
+    assert_eq!(fixture.snapshot(), before);
+    fixture.assert_read_only_docker_calls();
+}
+
+#[test]
+fn check_rejects_a_missing_lock_without_writing_project_files() {
+    let fixture = Fixture::new();
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["check"]);
+
+    assert_failure(&output, "dembly lock");
+    assert_eq!(fixture.snapshot(), before);
+    fixture.assert_read_only_docker_calls();
+}
+
+#[test]
+fn check_rejects_a_stale_lock_without_writing_project_files() {
+    let fixture = Fixture::new();
+    fixture.write_lock(true);
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["check"]);
+
+    assert_failure(&output, "dembly lock");
+    assert_eq!(fixture.snapshot(), before);
+    fixture.assert_read_only_docker_calls();
+}
+
+#[test]
+fn check_requires_an_applied_state_without_writing_project_files() {
+    let fixture = Fixture::new();
+    fixture.write_lock(false);
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["check"]);
+
+    assert_failure(&output, "applied state");
+    assert_eq!(fixture.snapshot(), before);
+    fixture.assert_read_only_docker_calls();
+}
+
+#[test]
+fn check_reports_a_managed_field_conflict_without_writing_project_files() {
+    let fixture = Fixture::new();
+    fixture.write_lock(false);
+    fixture.write_applied_state();
+    fixture.replace_compose("user: root", "user: altered");
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["check"]);
+
+    assert_failure(&output, "field user conflicts");
+    assert_eq!(fixture.snapshot(), before);
+    fixture.assert_read_only_docker_calls();
+}
+
+#[test]
+fn check_verifies_static_host_integrity_without_running_card_checks() {
+    let fixture = Fixture::new();
+    fixture.write_lock(false);
+    fixture.write_applied_state();
+    fixture.write_runtime_artifacts();
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["check"]);
+
+    assert_success(&output);
+    assert!(text(&output.stdout).contains("host integrity: valid"));
+    assert!(text(&output.stdout).contains("docker compose run"));
+    assert!(text(&output.stdout).contains("__runtime check"));
+    assert_eq!(fixture.snapshot(), before);
+    fixture.assert_read_only_docker_calls();
+}
+
+struct Fixture {
+    root: PathBuf,
+    project: PathBuf,
+    config: PathBuf,
+    compose: PathBuf,
+    card_manifest: PathBuf,
+    filesystem: PathBuf,
+    docker_log: PathBuf,
+    bin: PathBuf,
+    compose_json: PathBuf,
+    image_json: PathBuf,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "dembly-host-commands-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let deck_root = project.join(".dembly");
+        let card_root = deck_root.join("cards/tool");
+        let bin = root.join("bin");
+        fs::create_dir_all(&card_root).unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(root.join("home")).unwrap();
+
+        let fixture = Self {
+            config: deck_root.join("config.toml"),
+            compose: project.join("compose.yaml"),
+            card_manifest: card_root.join("card.toml"),
+            filesystem: card_root.join("rootfs.squashfs"),
+            docker_log: root.join("docker.log"),
+            compose_json: root.join("compose.json"),
+            image_json: root.join("image.json"),
+            root,
+            project,
+            bin,
+        };
+        fixture.write_inputs();
+        fixture.install_docker();
+        fixture
+    }
+
+    fn write_inputs(&self) {
+        fs::write(
+            &self.config,
+            "schema_version = 1\n[compose]\npath = \"../compose.yaml\"\nservice = \"dev\"\n[[cards]]\npath = \"cards/tool/card.toml\"\n[environment]\nMODE = \"deck\"\n[environment_path]\nprepend = [\"/deck/bin\"]\n",
+        )
+        .unwrap();
+        fs::write(&self.filesystem, b"abc").unwrap();
+        fs::write(
+            &self.card_manifest,
+            "schema_version = 1\nname = \"tool\"\nversion = \"1\"\n[filesystem]\ntype = \"squashfs\"\nfile = \"rootfs.squashfs\"\nsha256 = \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"\n[mount]\ntarget = \"/opt/tool\"\n[environment]\nCARD = \"enabled\"\n[environment_path]\nprepend = [\"bin\"]\n[check]\nexec = \"bin/never-run\"\n",
+        )
+        .unwrap();
+        fs::write(
+            &self.compose,
+            "name: fixture\nservices:\n  dev:\n    image: example/dev:latest\n    user: vscode:staff\n",
+        )
+        .unwrap();
+        fs::write(
+            &self.compose_json,
+            r#"{"services":{"dev":{"image":"example/dev:latest","entrypoint":["/init"],"command":["serve"],"user":"vscode:staff","environment":{"COMPOSE":"only"}}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            &self.image_json,
+            r#"[{"Id":"sha256:image","Config":{"Entrypoint":[],"Cmd":[],"Env":["PATH=/usr/bin","MODE=image"],"User":"image-user"}}]"#,
+        )
+        .unwrap();
+        fs::write(&self.docker_log, "").unwrap();
+    }
+
+    fn install_docker(&self) {
+        let docker = self.bin.join("docker");
+        fs::write(
+            &docker,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DEMBLY_DOCKER_LOG\"\nif [ \"$1\" = compose ]; then exec /bin/cat \"$DEMBLY_COMPOSE_JSON\"; fi\nif [ \"$1\" = image ] && [ \"$2\" = inspect ]; then exec /bin/cat \"$DEMBLY_IMAGE_JSON\"; fi\nexit 91\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&docker).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(docker, permissions).unwrap();
+    }
+
+    fn run<const N: usize>(&self, arguments: [&str; N]) -> Output {
+        let mut paths = vec![self.bin.clone()];
+        paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+        Command::new(env!("CARGO_BIN_EXE_dembly"))
+            .current_dir(&self.project)
+            .args(arguments)
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .env("HOME", self.root.join("home"))
+            .env("DEMBLY_DOCKER_LOG", &self.docker_log)
+            .env("DEMBLY_COMPOSE_JSON", &self.compose_json)
+            .env("DEMBLY_IMAGE_JSON", &self.image_json)
+            .output()
+            .expect("dembly should start")
+    }
+
+    fn add_optional_missing_bind(&self) {
+        let mut config = fs::read_to_string(&self.config).unwrap();
+        config.push_str("\n[[binds]]\nsource = \"${DECK_ROOT}/optional\"\ntarget = \"/work/optional\"\nmode = \"ro\"\nrequired = false\n");
+        fs::write(&self.config, config).unwrap();
+    }
+
+    fn write_lock(&self, stale: bool) {
+        let mut compose = ManagedCompose::read(&self.compose).unwrap();
+        compose
+            .set_lock(DemblyLock {
+                compose_path: self.compose.display().to_string(),
+                service: "dev".into(),
+                image: "sha256:image".into(),
+                cards: vec![dembly_docker::CardLock {
+                    name: "tool".into(),
+                    version: if stale { "stale" } else { "1" }.into(),
+                    manifest_sha256: sha256_file(&self.card_manifest).unwrap(),
+                    filesystem_sha256:
+                        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(),
+                }],
+            })
+            .unwrap();
+        fs::write(&self.compose, compose.to_bytes().unwrap()).unwrap();
+    }
+
+    fn write_applied_state(&self) {
+        let mut compose = ManagedCompose::read(&self.compose).unwrap();
+        compose
+            .apply(
+                "dev",
+                ManagedFields {
+                    entrypoint: Value::Sequence(vec![Value::String("/runtime/dembly".into())]),
+                    command: Value::Sequence(Vec::new()),
+                    user: Value::String("root".into()),
+                    privileged: Value::Bool(true),
+                    labels: BTreeMap::new(),
+                    mounts: Vec::new(),
+                },
+                "sha256:state",
+            )
+            .unwrap();
+        fs::write(&self.compose, compose.to_bytes().unwrap()).unwrap();
+        fs::write(
+            &self.compose_json,
+            r#"{"services":{"dev":{"image":"example/dev:latest","entrypoint":["/runtime/dembly"],"command":[],"user":"root","environment":{"COMPOSE":"only"}}}}"#,
+        )
+        .unwrap();
+    }
+
+    fn write_runtime_artifacts(&self) {
+        let runtime = self.project.join(".dembly/runtime");
+        fs::create_dir_all(runtime.join("bin")).unwrap();
+        let config = RuntimeConfig {
+            schema_version: 1,
+            lock_digest: "sha256:state".into(),
+            runtime_user: RuntimeUserSpec {
+                spec: "vscode:staff".into(),
+            },
+            cards: vec![RuntimeCard {
+                name: "tool".into(),
+                image: self.filesystem.clone(),
+                mount_target: PathBuf::from("/opt/tool"),
+            }],
+            binds: Vec::new(),
+            exports: Vec::new(),
+            hooks: Vec::new(),
+            checks: Vec::new(),
+            environment: BTreeMap::new(),
+            process_argv: vec!["serve".into()],
+        };
+        fs::write(
+            runtime.join("dev.toml"),
+            render_runtime_config(&config).unwrap(),
+        )
+        .unwrap();
+        let binary = runtime.join("bin/dembly");
+        fs::write(&binary, b"runtime binary").unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(binary, permissions).unwrap();
+    }
+
+    fn replace_compose(&self, from: &str, to: &str) {
+        let compose = fs::read_to_string(&self.compose).unwrap();
+        assert!(compose.contains(from), "{compose}");
+        fs::write(&self.compose, compose.replacen(from, to, 1)).unwrap();
+    }
+
+    fn snapshot(&self) -> BTreeMap<PathBuf, Vec<u8>> {
+        let mut paths = BTreeSet::new();
+        collect_files(&self.project, &self.project, &mut paths);
+        paths
+            .into_iter()
+            .map(|path| {
+                let relative = path.strip_prefix(&self.project).unwrap().to_path_buf();
+                (relative, fs::read(path).unwrap())
+            })
+            .collect()
+    }
+
+    fn docker_log(&self) -> String {
+        fs::read_to_string(&self.docker_log).unwrap()
+    }
+
+    fn assert_read_only_docker_calls(&self) {
+        assert_eq!(
+            self.docker_log(),
+            format!(
+                "compose\n-f\n{}\nconfig\n--format\njson\nimage\ninspect\nexample/dev:latest\n",
+                self.compose.display()
+            )
+        );
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn collect_files(root: &Path, directory: &Path, paths: &mut BTreeSet<PathBuf>) {
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        if metadata.file_type().is_dir() {
+            collect_files(root, &path, paths);
+        } else if metadata.file_type().is_file() {
+            assert!(path.starts_with(root));
+            paths.insert(path);
+        }
+    }
+}
+
+fn assert_success(output: &Output) {
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        text(&output.stdout),
+        text(&output.stderr)
+    );
+}
+
+fn assert_failure(output: &Output, expected: &str) {
+    assert!(
+        !output.status.success(),
+        "stdout={} stderr={}",
+        text(&output.stdout),
+        text(&output.stderr)
+    );
+    assert!(
+        text(&output.stderr).contains(expected),
+        "stderr={}",
+        text(&output.stderr)
+    );
+}
+
+fn text(bytes: &[u8]) -> String {
+    String::from_utf8(bytes.to_vec()).unwrap()
+}

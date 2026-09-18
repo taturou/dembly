@@ -17,7 +17,7 @@ Commands:
   apply     Apply Dembly metadata to Compose
   unapply   Remove Dembly metadata from Compose
   inspect   Display the resolved configuration
-  check     Run Card checks
+  check     Verify static Host integrity
   card      Build Card artifacts
   help      Print this message
 ";
@@ -80,13 +80,13 @@ fn dispatch(
 ) -> Result<(), CliError> {
     match command {
         HostCommand::Init(context) => commands::init::run(&context, input, output),
+        HostCommand::Validate(context) => commands::validate::run(&context, output),
+        HostCommand::Inspect(context) => commands::inspect::run(&context, output),
+        HostCommand::Check(context) => commands::check::run(&context, output),
         HostCommand::CardBuild(arguments) => card_build(&arguments),
-        HostCommand::Validate(_)
-        | HostCommand::Lock(_)
-        | HostCommand::Apply(_)
-        | HostCommand::Unapply(_)
-        | HostCommand::Inspect(_)
-        | HostCommand::Check(_) => Err(CliError::new("command is not implemented yet")),
+        HostCommand::Lock(_) | HostCommand::Apply(_) | HostCommand::Unapply(_) => {
+            Err(CliError::new("command is not implemented yet"))
+        }
     }
 }
 

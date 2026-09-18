@@ -1,0 +1,15 @@
+use dembly_cli::{CliError, HostContext, HostPlan};
+use std::io::Write;
+
+pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError> {
+    let plan = HostPlan::resolve(&context.config_path)?;
+    write_warnings(&plan);
+    writeln!(output, "valid: {}", plan.deck.path.display())
+        .map_err(|error| CliError::new(format!("cannot write validation result: {error}")))
+}
+
+pub(crate) fn write_warnings(plan: &HostPlan) {
+    for warning in &plan.deck.warnings {
+        eprintln!("warning: {warning}");
+    }
+}

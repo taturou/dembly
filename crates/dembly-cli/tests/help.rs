@@ -26,6 +26,10 @@ fn public_help_lists_host_commands_without_legacy_lifecycle_commands() {
     ] {
         assert!(stdout.contains(command), "missing {command} in {stdout}");
     }
+    assert!(
+        stdout.contains("check     Verify static Host integrity"),
+        "check must not promise to execute Runtime Card checks: {stdout}"
+    );
     for command in ["up", "down", "run", "exec", "__runtime"] {
         assert!(
             !stdout.contains(command),
