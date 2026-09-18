@@ -36,6 +36,14 @@ pub fn resolve_runtime_user(
     }
 
     let numeric_uid = parse_numeric_identifier(user_spec, "UID")?;
+    let numeric_gid = group_spec
+        .map(|value| parse_numeric_identifier(value, "GID"))
+        .transpose()?
+        .flatten();
+    if group_spec.is_some() && numeric_uid.is_some() != numeric_gid.is_some() {
+        return Err(format!("invalid runtime user spec: {spec}"));
+    }
+
     let passwd_entry = passwd
         .lines()
         .find_map(|line| parse_passwd_line(line, user_spec, numeric_uid))
@@ -44,7 +52,7 @@ pub fn resolve_runtime_user(
 
     let gid = match group_spec {
         None => passwd_entry.gid,
-        Some(value) => match parse_numeric_identifier(value, "GID")? {
+        Some(value) => match numeric_gid {
             Some(gid) => gid,
             None => resolve_named_group(value, group)?,
         },

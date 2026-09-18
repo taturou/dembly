@@ -102,3 +102,33 @@ exit 0
 
 - `design/spec.md` 7.6、10.1から10.5
 - `design/superpowers/plans/2026-09-18-compose-workflow-migration.md` Task 6、Task 10
+
+## Fix round 1/5
+
+### 原因
+
+user部分とgroup部分を独立に名前または数値として解釈していたため、仕様外の`user:gid`と`uid:group`も解決できていました。
+
+### RED
+
+```text
+cargo test -p dembly-runtime --test user
+rejects_named_user_with_numeric_group ... FAILED
+rejects_numeric_uid_with_named_group ... FAILED
+
+Ok(ResolvedRuntimeUser { name: "vscode", uid: 1000, gid: 3000, ... })
+Ok(ResolvedRuntimeUser { name: "vscode", uid: 1000, gid: 2000, ... })
+```
+
+### 修正
+
+- passwd/group entryの検索前に、user部分とgroup部分の数値性を確定します。
+- group指定時は両方が名前、または両方が数値の場合だけ受理します。
+- `user`、`uid`、`user:group`、`uid:gid`の4形式は維持します。
+
+### GREEN
+
+```text
+cargo test -p dembly-runtime --test user
+6 passed; 0 failed
+```

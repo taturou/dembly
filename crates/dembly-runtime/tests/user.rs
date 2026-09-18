@@ -41,6 +41,20 @@ fn resolves_named_and_numeric_explicit_groups() {
 }
 
 #[test]
+fn rejects_named_user_with_numeric_group() {
+    let error = resolve_runtime_user("vscode:3000", PASSWD, GROUP).unwrap_err();
+
+    assert!(error.contains("invalid runtime user spec"), "{error}");
+}
+
+#[test]
+fn rejects_numeric_uid_with_named_group() {
+    let error = resolve_runtime_user("1000:developers", PASSWD, GROUP).unwrap_err();
+
+    assert!(error.contains("invalid runtime user spec"), "{error}");
+}
+
+#[test]
 fn rejects_unresolvable_or_malformed_user_specs() {
     for spec in ["", ":developers", "vscode:", "vscode:developers:extra"] {
         assert!(resolve_runtime_user(spec, PASSWD, GROUP).is_err(), "{spec}");
