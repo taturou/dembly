@@ -1,4 +1,4 @@
-use dembly_core::sha256_file;
+use dembly_core::{sha256_bytes, sha256_file};
 use dembly_docker::{DemblyLock, ManagedCompose, ManagedFields, ManagedMount, ManagedValue};
 use dembly_runtime::{render_runtime_config, RuntimeCard, RuntimeConfig, RuntimeUserSpec};
 use serde_yaml::Value;
@@ -102,7 +102,7 @@ fn check_rejects_a_missing_lock_without_writing_project_files() {
 
     assert_failure(&output, "dembly lock");
     assert_eq!(fixture.snapshot(), before);
-    fixture.assert_read_only_docker_calls();
+    assert_eq!(fixture.docker_log(), "");
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn check_rejects_a_stale_lock_without_writing_project_files() {
 
     assert_failure(&output, "dembly lock");
     assert_eq!(fixture.snapshot(), before);
-    fixture.assert_read_only_docker_calls();
+    assert_eq!(fixture.docker_log(), "");
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn check_requires_an_applied_state_without_writing_project_files() {
 
     assert_failure(&output, "applied state");
     assert_eq!(fixture.snapshot(), before);
-    fixture.assert_read_only_docker_calls();
+    assert_eq!(fixture.docker_log(), "");
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn check_reports_a_managed_field_conflict_without_writing_project_files() {
 
     assert_failure(&output, "field user conflicts");
     assert_eq!(fixture.snapshot(), before);
-    fixture.assert_read_only_docker_calls();
+    assert_eq!(fixture.docker_log(), "");
 }
 
 #[test]
@@ -165,7 +165,90 @@ fn check_verifies_static_host_integrity_without_running_card_checks() {
         fixture.compose.display()
     )));
     assert_eq!(fixture.snapshot(), before);
-    fixture.assert_read_only_docker_calls();
+    assert_eq!(fixture.docker_log(), "");
+}
+
+#[test]
+fn check_rejects_tampering_in_every_runtime_plan_section() {
+    for (from, to) in [
+        ("spec = \"vscode:staff\"", "spec = \"altered\""),
+        ("name = \"tool\"", "name = \"altered\""),
+        ("rootfs.squashfs", "altered.squashfs"),
+        (
+            "mount_target = \"/opt/tool\"",
+            "mount_target = \"/opt/altered\"",
+        ),
+        (
+            "volume_targets = [\"/cache\"]",
+            "volume_targets = [\"/altered\"]",
+        ),
+        ("${HOME}/.config", "${HOME}/.tampered"),
+        ("/opt/tool/bin/tool", "/opt/tool/bin/altered"),
+        ("/opt/tool/setup", "/opt/tool/altered-setup"),
+        (
+            "exec = \"/opt/tool/check\"",
+            "exec = \"/opt/tool/altered-check\"",
+        ),
+        ("args = [\"--version\"]", "args = [\"--tampered\"]"),
+        ("MODE = \"runtime\"", "MODE = \"tampered\""),
+        ("argv = [\"serve\"]", "argv = [\"tampered\"]"),
+    ] {
+        let fixture = Fixture::new();
+        fixture.write_lock(false);
+        let digest = fixture.current_lock_digest();
+        fixture.write_applied_state(&digest);
+        fixture.write_runtime_artifacts(&digest);
+        let runtime = fixture.project.join(".dembly/runtime/dev.toml");
+        let source = fs::read_to_string(&runtime).unwrap();
+        assert!(source.contains(from), "missing fixture fragment {from:?}");
+        fs::write(&runtime, source.replacen(from, to, 1)).unwrap();
+        let before = fixture.snapshot();
+
+        let output = fixture.run(["check"]);
+
+        assert_failure(&output, "Runtime plan digest");
+        assert_eq!(fixture.snapshot(), before);
+    }
+}
+
+#[test]
+fn check_rejects_runtime_binary_byte_tampering() {
+    let fixture = Fixture::new();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
+    fs::write(
+        fixture.project.join(".dembly/runtime/bin/dembly"),
+        b"tampered executable",
+    )
+    .unwrap();
+    let before = fixture.snapshot();
+
+    let output = fixture.run(["check"]);
+
+    assert_failure(&output, "Runtime binary digest");
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[test]
+fn check_succeeds_without_invoking_docker() {
+    let fixture = Fixture::new();
+    fixture.write_lock(false);
+    let digest = fixture.current_lock_digest();
+    fixture.write_applied_state(&digest);
+    fixture.write_runtime_artifacts(&digest);
+    fs::write(
+        fixture.bin.join("docker"),
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DEMBLY_DOCKER_LOG\"\nexit 97\n",
+    )
+    .unwrap();
+    fs::write(&fixture.docker_log, "").unwrap();
+
+    let output = fixture.run(["check"]);
+
+    assert_success(&output);
+    assert_eq!(fixture.docker_log(), "");
 }
 
 #[test]
@@ -182,7 +265,7 @@ fn check_rejects_runtime_state_from_a_previous_lock_generation_without_writing_p
 
     assert_failure(&output, "lock digest");
     assert_eq!(fixture.snapshot(), before);
-    fixture.assert_read_only_docker_calls();
+    assert_eq!(fixture.docker_log(), "");
 }
 
 #[test]
@@ -199,7 +282,7 @@ fn check_rejects_a_managed_lock_label_from_a_previous_generation_without_writing
 
     assert_failure(&output, "managed label");
     assert_eq!(fixture.snapshot(), before);
-    fixture.assert_read_only_docker_calls();
+    assert_eq!(fixture.docker_log(), "");
 }
 
 struct Fixture {
@@ -340,6 +423,7 @@ impl Fixture {
     }
 
     fn write_applied_state(&self, lock_digest: &str) {
+        let (runtime_bytes, binary_bytes) = self.runtime_artifact_contents(lock_digest);
         let mut compose = ManagedCompose::read(&self.compose).unwrap();
         compose
             .apply(
@@ -349,10 +433,20 @@ impl Fixture {
                     command: Value::Sequence(Vec::new()),
                     user: Value::String("root".into()),
                     privileged: Value::Bool(true),
-                    labels: BTreeMap::from([(
-                        "io.dembly.lock-digest".into(),
-                        Value::String(lock_digest.into()),
-                    )]),
+                    labels: BTreeMap::from([
+                        (
+                            "io.dembly.lock-digest".into(),
+                            Value::String(lock_digest.into()),
+                        ),
+                        (
+                            "io.dembly.runtime-plan-digest".into(),
+                            Value::String(format!("sha256:{}", sha256_bytes(&runtime_bytes))),
+                        ),
+                        (
+                            "io.dembly.runtime-binary-digest".into(),
+                            Value::String(format!("sha256:{}", sha256_bytes(&binary_bytes))),
+                        ),
+                    ]),
                     mounts: vec![ManagedMount {
                         target: "/run/dembly/runtime/dev.toml".into(),
                         value: Value::String(
@@ -374,6 +468,16 @@ impl Fixture {
     fn write_runtime_artifacts(&self, lock_digest: &str) {
         let runtime = self.project.join(".dembly/runtime");
         fs::create_dir_all(runtime.join("bin")).unwrap();
+        let (runtime_bytes, binary_bytes) = self.runtime_artifact_contents(lock_digest);
+        fs::write(runtime.join("dev.toml"), runtime_bytes).unwrap();
+        let binary = runtime.join("bin/dembly");
+        fs::write(&binary, binary_bytes).unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(binary, permissions).unwrap();
+    }
+
+    fn runtime_artifact_contents(&self, lock_digest: &str) -> (Vec<u8>, Vec<u8>) {
         let config = RuntimeConfig {
             schema_version: 1,
             lock_digest: lock_digest.into(),
@@ -385,23 +489,33 @@ impl Fixture {
                 image: self.filesystem.clone(),
                 mount_target: PathBuf::from("/opt/tool"),
             }],
-            binds: Vec::new(),
-            exports: Vec::new(),
-            hooks: Vec::new(),
-            checks: Vec::new(),
-            environment: BTreeMap::new(),
+            volume_targets: vec![PathBuf::from("/cache")],
+            binds: vec![dembly_runtime::RuntimeBind {
+                source: PathBuf::from("/run/dembly/binds/0"),
+                target: "${HOME}/.config".into(),
+                mode: "ro".into(),
+            }],
+            exports: vec![dembly_runtime::RuntimeExport {
+                source: PathBuf::from("/opt/tool/bin/tool"),
+                target: PathBuf::from("/usr/local/bin/tool"),
+            }],
+            hooks: vec![dembly_runtime::RuntimeHook {
+                card: "tool".into(),
+                exec: PathBuf::from("/opt/tool/setup"),
+                args: vec!["--install".into()],
+            }],
+            checks: vec![dembly_runtime::RuntimeCheck {
+                card: "tool".into(),
+                exec: PathBuf::from("/opt/tool/check"),
+                args: vec!["--version".into()],
+            }],
+            environment: BTreeMap::from([("MODE".into(), "runtime".into())]),
             process_argv: vec!["serve".into()],
         };
-        fs::write(
-            runtime.join("dev.toml"),
-            render_runtime_config(&config).unwrap(),
+        (
+            render_runtime_config(&config).unwrap().into_bytes(),
+            b"runtime binary".to_vec(),
         )
-        .unwrap();
-        let binary = runtime.join("bin/dembly");
-        fs::write(&binary, b"runtime binary").unwrap();
-        let mut permissions = fs::metadata(&binary).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(binary, permissions).unwrap();
     }
 
     fn replace_compose(&self, from: &str, to: &str) {

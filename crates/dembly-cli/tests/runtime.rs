@@ -26,6 +26,7 @@ fn init_runs_root_setup_in_strict_order_before_intended_user_exec() {
             "mount_card:alpha:/run/dembly/cards/alpha.squashfs:/opt/cards/alpha",
             "mount_card:beta:/run/dembly/cards/beta.squashfs:/opt/cards/beta",
             "ensure_card_mounts:alpha,beta",
+            "ensure_volume_targets:/workspace/cache,/var/lib/tool",
             "mount_bind:/run/dembly/binds/0:${HOME}/.gitconfig:ro:vscode",
             "create_export:/opt/cards/alpha/bin/tool:/usr/local/bin/tool",
             "set_environment:MODE=development",
@@ -157,6 +158,35 @@ fn environment_failure_prevents_root_hook_privilege_drop_and_exec() {
                 .iter()
                 .any(|event| event.starts_with(forbidden)),
             "unexpected {forbidden} after environment failure: {:?}",
+            system.events
+        );
+    }
+}
+
+#[test]
+fn missing_volume_target_stops_before_bind_setup_privilege_drop_and_exec() {
+    let plan = fixture("volume-error", &complete_config());
+    let mut system = RecordingSystem::root().failing("ensure_volume_targets:");
+
+    let error =
+        run_runtime_command(&strings(["init", plan.to_str().unwrap()]), &mut system).unwrap_err();
+
+    assert!(error.contains("Compose Volume targets"), "{error}");
+    for forbidden in [
+        "mount_bind:",
+        "create_export:",
+        "set_environment:",
+        "run_hook:",
+        "set_gid:",
+        "set_uid:",
+        "exec:",
+    ] {
+        assert!(
+            !system
+                .events
+                .iter()
+                .any(|event| event.starts_with(forbidden)),
+            "unexpected {forbidden} after Volume target failure: {:?}",
             system.events
         );
     }
@@ -323,6 +353,17 @@ impl RuntimeSystem for RecordingSystem {
         ))
     }
 
+    fn ensure_volume_targets(&mut self, targets: &[PathBuf]) -> Result<(), String> {
+        self.record(format!(
+            "ensure_volume_targets:{}",
+            targets
+                .iter()
+                .map(|target| target.display().to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        ))
+    }
+
     fn mount_bind(&mut self, bind: &RuntimeBind, user: &ResolvedRuntimeUser) -> Result<(), String> {
         self.record(format!(
             "mount_bind:{}:{}:{}:{}",
@@ -401,6 +442,7 @@ fn fixture(name: &str, contents: &str) -> PathBuf {
 fn complete_config() -> String {
     r#"schema_version = 1
 lock_digest = "sha256:lock"
+volume_targets = ["/workspace/cache", "/var/lib/tool"]
 
 [runtime_user]
 spec = "vscode"

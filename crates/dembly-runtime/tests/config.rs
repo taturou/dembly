@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 const COMPLETE_CONFIG: &str = r#"schema_version = 1
 lock_digest = "sha256:lock"
+volume_targets = ["/workspace/cache", "/var/lib/tool"]
 
 [runtime_user]
 spec = "vscode"
@@ -46,6 +47,13 @@ fn strict_runtime_config_round_trips_all_plan_sections_deterministically() {
 
     assert_eq!(config.schema_version, 1);
     assert_eq!(config.lock_digest, "sha256:lock");
+    assert_eq!(
+        config.volume_targets,
+        [
+            PathBuf::from("/workspace/cache"),
+            PathBuf::from("/var/lib/tool")
+        ]
+    );
     assert_eq!(config.runtime_user.spec, "vscode");
     assert_eq!(config.cards[0].name, "clang");
     assert_eq!(config.binds[0].target, "${HOME}/.config/${USER}");

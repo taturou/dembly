@@ -10,6 +10,7 @@ pub struct RuntimeConfig {
     pub lock_digest: String,
     pub runtime_user: RuntimeUserSpec,
     pub cards: Vec<RuntimeCard>,
+    pub volume_targets: Vec<PathBuf>,
     pub binds: Vec<RuntimeBind>,
     pub exports: Vec<RuntimeExport>,
     pub hooks: Vec<RuntimeHook>,
@@ -59,6 +60,8 @@ struct RuntimeConfigDocument {
     runtime_user: RuntimeUserSpec,
     #[serde(default)]
     cards: Vec<RuntimeCard>,
+    #[serde(default)]
+    volume_targets: Vec<PathBuf>,
     #[serde(default)]
     binds: Vec<RuntimeBind>,
     #[serde(default)]
@@ -112,6 +115,7 @@ impl TryFrom<RuntimeConfigDocument> for RuntimeConfig {
             lock_digest: document.lock_digest,
             runtime_user: document.runtime_user,
             cards: document.cards,
+            volume_targets: document.volume_targets,
             binds: document.binds,
             exports: document.exports,
             hooks: document.hooks,
@@ -129,6 +133,7 @@ impl From<RuntimeConfig> for RuntimeConfigDocument {
             lock_digest: config.lock_digest,
             runtime_user: config.runtime_user,
             cards: config.cards,
+            volume_targets: config.volume_targets,
             binds: config.binds,
             exports: config.exports,
             hooks: config.hooks,

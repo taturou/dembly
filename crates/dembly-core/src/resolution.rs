@@ -4,6 +4,7 @@ use crate::{
     CardEnvironment, ConfigDocument, CoreError, HostVariables, MountResource, VolumeOwner,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
@@ -66,8 +67,8 @@ pub fn resolve_deck(
     let mut cards = Vec::new();
     for reference in &deck.cards {
         let manifest_path = resolve_card_path(&root, &reference.path)?;
-        let card = load_card(&manifest_path)?;
-        validate_card(&manifest_path, &card)?;
+        let mut card = load_card(&manifest_path)?;
+        validate_card(&manifest_path, &mut card)?;
         if !names.insert(card.name.clone()) {
             return Err(error(format!("duplicate Card name: {}", card.name)));
         }
@@ -180,7 +181,7 @@ fn validate_schema(path: &Path, schema: u32, kind: &str) -> Result<(), CoreError
         ))
     }
 }
-fn validate_card(path: &Path, card: &CardDocument) -> Result<(), CoreError> {
+fn validate_card(path: &Path, card: &mut CardDocument) -> Result<(), CoreError> {
     validate_schema(path, card.schema_version, "Card")?;
     if card.name.is_empty()
         || !card
@@ -208,23 +209,27 @@ fn validate_card(path: &Path, card: &CardDocument) -> Result<(), CoreError> {
             "filesystem.sha256 must be lowercase hex SHA-256",
         ));
     }
-    if !Path::new(&card.mount.target).is_absolute()
-        || card.mount.target.contains("..")
-        || card.mount.target.contains('$')
-    {
+    if card.mount.target.contains('$') {
         return Err(CoreError::parse(
             path,
             format!("invalid Card mount target: {}", card.mount.target),
         ));
     }
-    for export in &card.exports {
+    card.mount.target = normalize_runtime_target(&card.mount.target, "Card mount target")?
+        .to_string_lossy()
+        .into_owned();
+    for export in &mut card.exports {
         if Path::new(&export.source).is_absolute()
             || export.source.split('/').any(|part| part == "..")
-            || !Path::new(&export.target).is_absolute()
-            || !export.target.starts_with("/usr/local/bin/")
         {
             return Err(CoreError::parse(path, "invalid Card export"));
         }
+        let target = normalize_runtime_target(&export.target, "Card export target")?;
+        let export_root = Path::new("/usr/local/bin");
+        if target == export_root || !target.starts_with(export_root) {
+            return Err(CoreError::parse(path, "invalid Card export"));
+        }
+        export.target = target.to_string_lossy().into_owned();
     }
     for hook in &card.post_mount_hooks {
         validate_card_relative(path, &hook.exec, "hook exec")?;
@@ -252,19 +257,21 @@ fn resolve_volume(
     owner: VolumeOwner,
     volume: &crate::Volume,
 ) -> Result<ResolvedVolume, CoreError> {
-    if !Path::new(&volume.target).is_absolute() || volume.target.contains('$') {
+    if volume.target.contains('$') {
         return Err(error(format!(
             "Volume {} target must be an absolute Runtime path",
             volume.name
         )));
     }
+    let target =
+        normalize_runtime_target(&volume.target, &format!("Volume {} target", volume.name))?;
     let source = resolve_volume_path(root, &owner, &volume.name, volume.shared)?;
     reject_symlinked_volume_storage(root, &source)?;
     Ok(ResolvedVolume {
         owner,
         name: volume.name.clone(),
         source,
-        target: PathBuf::from(&volume.target),
+        target,
         shared: volume.shared,
     })
 }
@@ -322,12 +329,53 @@ fn validate_exports(cards: &[ResolvedCard]) -> Result<(), CoreError> {
     let mut targets = BTreeSet::new();
     for card in cards {
         for export in &card.document.exports {
-            if !targets.insert(export.target.clone()) {
+            let target = normalize_runtime_target(&export.target, "Card export target")?;
+            if !targets.insert(target) {
                 return Err(error(format!("duplicate export target: {}", export.target)));
             }
         }
     }
     Ok(())
+}
+
+fn normalize_runtime_target(value: &str, label: &str) -> Result<PathBuf, CoreError> {
+    let path = Path::new(value);
+    if !path.is_absolute() {
+        return Err(error(format!("{label} must be an absolute Runtime path")));
+    }
+
+    let mut normalized = PathBuf::from("/");
+    for component in path.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::CurDir => {}
+            std::path::Component::Normal(component) => {
+                normalized.push(component);
+                match fs::symlink_metadata(&normalized) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        return Err(error(format!(
+                            "{label} must not traverse a symlink: {}",
+                            normalized.display()
+                        )))
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(source) => {
+                        return Err(error(format!(
+                            "cannot inspect {label} {}: {source}",
+                            normalized.display()
+                        )))
+                    }
+                }
+            }
+            std::path::Component::ParentDir => {
+                return Err(error(format!("{label} must not contain parent traversal")))
+            }
+            std::path::Component::Prefix(_) => {
+                return Err(error(format!("{label} must be an absolute Runtime path")))
+            }
+        }
+    }
+    Ok(normalized)
 }
 fn normalize_relative(root: &Path, value: &str, label: &str) -> Result<PathBuf, CoreError> {
     let value = Path::new(value);

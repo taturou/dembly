@@ -94,6 +94,7 @@ fn config() -> RuntimeConfig {
             spec: "vscode".into(),
         },
         cards: Vec::new(),
+        volume_targets: Vec::new(),
         binds: Vec::new(),
         exports: Vec::new(),
         hooks: Vec::new(),

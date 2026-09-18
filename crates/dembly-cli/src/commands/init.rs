@@ -1,6 +1,6 @@
 use dembly_cli::{CliError, HostContext};
 use std::collections::BTreeSet;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Component, Path, PathBuf};
 
@@ -65,27 +65,9 @@ pub fn run(
             ))
         })?;
     }
-    let mut destination = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&context.config_path)
-        .map_err(|error| {
-            CliError::new(format!(
-                "cannot create config {}: {error}",
-                context.config_path.display()
-            ))
-        })?;
-    destination
-        .write_all(document.as_bytes())
-        .map_err(|error| {
-            CliError::new(format!(
-                "cannot write config {}: {error}",
-                context.config_path.display()
-            ))
-        })?;
-    destination.sync_all().map_err(|error| {
+    dembly_docker::atomic_create(&context.config_path, document.as_bytes()).map_err(|error| {
         CliError::new(format!(
-            "cannot sync config {}: {error}",
+            "cannot create config {}: {error}",
             context.config_path.display()
         ))
     })?;

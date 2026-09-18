@@ -21,6 +21,42 @@ pub struct HostPlan {
     pub environment: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct CheckHostPlan {
+    pub deck: ResolvedDeck,
+    pub managed_compose: ManagedCompose,
+    pub compose_files: Vec<PathBuf>,
+}
+
+impl CheckHostPlan {
+    pub fn resolve(config_path: &Path) -> Result<Self, CliError> {
+        let host_home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| CliError::new("HOME is required to resolve Host paths"))?;
+        let variables = HostVariables {
+            host_home,
+            deck_root: config_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .to_path_buf(),
+        };
+        let deck = resolve_deck(config_path, &variables).map_err(core_error)?;
+        for card in &deck.cards {
+            verify_card_filesystem(&card.manifest_path, &card.document).map_err(core_error)?;
+        }
+
+        let managed_compose = ManagedCompose::read(&deck.compose_path).map_err(docker_error)?;
+        let service = &deck.document.compose.service;
+        managed_compose.service(service).map_err(docker_error)?;
+        let compose_files = vec![deck.compose_path.clone()];
+        Ok(Self {
+            deck,
+            managed_compose,
+            compose_files,
+        })
+    }
+}
+
 impl HostPlan {
     pub fn resolve(config_path: &Path) -> Result<Self, CliError> {
         let host_home = std::env::var_os("HOME")

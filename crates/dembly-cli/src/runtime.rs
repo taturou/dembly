@@ -14,6 +14,7 @@ pub trait RuntimeSystem {
     fn read_group(&mut self) -> Result<String, String>;
     fn mount_card(&mut self, card: &RuntimeCard) -> Result<(), String>;
     fn ensure_card_mounts(&mut self, cards: &[RuntimeCard]) -> Result<(), String>;
+    fn ensure_volume_targets(&mut self, targets: &[PathBuf]) -> Result<(), String>;
     fn mount_bind(&mut self, bind: &RuntimeBind, user: &ResolvedRuntimeUser) -> Result<(), String>;
     fn create_export(&mut self, export: &RuntimeExport) -> Result<(), String>;
     fn run_hook(
@@ -76,6 +77,9 @@ fn run_init(arguments: &[String], system: &mut impl RuntimeSystem) -> Result<(),
     system
         .ensure_card_mounts(&config.cards)
         .map_err(|error| format!("cannot verify Card mount targets: {error}"))?;
+    system
+        .ensure_volume_targets(&config.volume_targets)
+        .map_err(|error| format!("cannot verify Compose Volume targets: {error}"))?;
     for bind in &config.binds {
         system.mount_bind(bind, &user).map_err(|error| {
             format!(
@@ -183,6 +187,10 @@ impl RuntimeSystem for NativeRuntimeSystem {
 
     fn ensure_card_mounts(&mut self, cards: &[RuntimeCard]) -> Result<(), String> {
         dembly_runtime::ensure_mount_targets_exist(cards)
+    }
+
+    fn ensure_volume_targets(&mut self, targets: &[PathBuf]) -> Result<(), String> {
+        dembly_runtime::ensure_volume_targets_exist(targets)
     }
 
     fn mount_bind(&mut self, bind: &RuntimeBind, user: &ResolvedRuntimeUser) -> Result<(), String> {

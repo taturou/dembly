@@ -136,6 +136,91 @@ fn resolved_volume_rejects_symlinked_storage_components() {
 }
 
 #[test]
+fn runtime_export_and_volume_targets_reject_parent_traversal() {
+    let root = std::env::temp_dir().join(format!(
+        "dembly-runtime-target-traversal-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let card_root = root.join(".dembly/cards/tool");
+    fs::create_dir_all(&card_root).unwrap();
+    let config = root.join(".dembly/config.toml");
+    let card = card_root.join("card.toml");
+
+    fs::write(
+        &config,
+        "schema_version = 1\n[compose]\npath = \"../compose.yaml\"\nservice = \"dev\"\n[[cards]]\npath = \"cards/tool/card.toml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        &card,
+        "schema_version = 1\nname = \"tool\"\nversion = \"1\"\n[filesystem]\ntype = \"squashfs\"\nfile = \"rootfs.squashfs\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n[mount]\ntarget = \"/opt/tool\"\n[[exports]]\nsource = \"bin/tool\"\ntarget = \"/usr/local/bin/../../../tmp/tool\"\n",
+    )
+    .unwrap();
+
+    assert!(resolve_deck(&config, &variables_for(&config)).is_err());
+
+    fs::write(
+        &config,
+        "schema_version = 1\n[compose]\npath = \"../compose.yaml\"\nservice = \"dev\"\n[[volumes]]\nname = \"cache\"\ntarget = \"/workspace/../../../tmp/cache\"\n",
+    )
+    .unwrap();
+    assert!(resolve_deck(&config, &variables_for(&config)).is_err());
+}
+
+#[test]
+fn runtime_volume_target_rejects_symlinked_components() {
+    let root = std::env::temp_dir().join(format!(
+        "dembly-runtime-target-symlink-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join(".dembly")).unwrap();
+    fs::create_dir_all(root.join("outside")).unwrap();
+    let link = root.join("runtime-link");
+    std::os::unix::fs::symlink(root.join("outside"), &link).unwrap();
+    let config = root.join(".dembly/config.toml");
+    fs::write(
+        &config,
+        format!(
+            "schema_version = 1\n[compose]\npath = \"../compose.yaml\"\nservice = \"dev\"\n[[volumes]]\nname = \"cache\"\ntarget = \"{}/cache\"\n",
+            link.display()
+        ),
+    )
+    .unwrap();
+
+    assert!(resolve_deck(&config, &variables_for(&config)).is_err());
+}
+
+#[test]
+fn normalized_export_targets_are_rejected_as_duplicates() {
+    let root = std::env::temp_dir().join(format!(
+        "dembly-normalized-export-collision-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let card_root = root.join(".dembly/cards/tool");
+    fs::create_dir_all(&card_root).unwrap();
+    let config = root.join(".dembly/config.toml");
+    fs::write(
+        &config,
+        "schema_version = 1\n[compose]\npath = \"../compose.yaml\"\nservice = \"dev\"\n[[cards]]\npath = \"cards/tool/card.toml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        card_root.join("card.toml"),
+        "schema_version = 1\nname = \"tool\"\nversion = \"1\"\n[filesystem]\ntype = \"squashfs\"\nfile = \"rootfs.squashfs\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n[mount]\ntarget = \"/opt/tool\"\n[[exports]]\nsource = \"bin/one\"\ntarget = \"/usr/local/bin/tool\"\n[[exports]]\nsource = \"bin/two\"\ntarget = \"/usr/local/bin//tool\"\n",
+    )
+    .unwrap();
+
+    let error = resolve_deck(&config, &variables_for(&config)).unwrap_err();
+    assert!(
+        error.to_string().contains("duplicate export target"),
+        "{error}"
+    );
+}
+
+#[test]
 fn resolved_deck_exposes_config_relative_and_deck_root_compose_paths() {
     let root = std::env::temp_dir().join(format!("dembly-compose-path-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);

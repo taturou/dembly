@@ -1,3 +1,4 @@
+use dembly_core::sha256_bytes;
 use dembly_docker::ManagedCompose;
 use dembly_runtime::load_runtime_config;
 use serde_yaml::Value;
@@ -24,6 +25,14 @@ fn apply_stages_runtime_artifacts_and_updates_only_the_selected_service() {
     assert_eq!(runtime.runtime_user.spec, "vscode:staff");
     assert_eq!(runtime.process_argv, ["/image-init", "serve"]);
     assert_eq!(runtime.cards[0].name, "tool");
+    assert_eq!(
+        runtime.volume_targets,
+        [
+            PathBuf::from("/cache"),
+            PathBuf::from("/private"),
+            PathBuf::from("/shared")
+        ]
+    );
     assert_eq!(
         runtime.cards[0].image,
         Path::new("/run/dembly/cards/tool.squashfs")
@@ -75,6 +84,20 @@ fn apply_stages_runtime_artifacts_and_updates_only_the_selected_service() {
     assert_eq!(
         dev["labels"]["io.dembly.lock-digest"],
         Value::String(digest)
+    );
+    assert_eq!(
+        dev["labels"]["io.dembly.runtime-plan-digest"],
+        Value::String(format!(
+            "sha256:{}",
+            sha256_bytes(&fs::read(runtime_root.join("dev.toml")).unwrap())
+        ))
+    );
+    assert_eq!(
+        dev["labels"]["io.dembly.runtime-binary-digest"],
+        Value::String(format!(
+            "sha256:{}",
+            sha256_bytes(&fs::read(runtime_root.join("bin/dembly")).unwrap())
+        ))
     );
     assert_eq!(dev["environment"]["USER_FIELD"], "retained");
     assert_eq!(services["other"]["command"], "untouched");

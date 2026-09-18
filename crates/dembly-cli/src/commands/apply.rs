@@ -19,7 +19,13 @@ pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError
     let executable = std::env::current_exe()
         .map_err(|error| CliError::new(format!("cannot locate current executable: {error}")))?;
     let artifacts = ApplyArtifacts::prepare(&plan, &lock_digest, &executable)?;
-    let desired = build_managed_fields(&plan, artifacts.runtime_path(), &lock_digest);
+    let desired = build_managed_fields(
+        &plan,
+        artifacts.runtime_path(),
+        &lock_digest,
+        artifacts.runtime_digest(),
+        artifacts.binary_digest(),
+    );
     plan.managed_compose
         .apply(&plan.deck.document.compose.service, desired, &lock_digest)
         .map_err(|error| CliError::new(error.to_string()))?;

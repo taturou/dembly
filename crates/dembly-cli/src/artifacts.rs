@@ -1,5 +1,8 @@
 use crate::{CliError, HostPlan};
-use dembly_docker::{atomic_replace, ManagedFields, ManagedMount};
+use dembly_core::sha256_bytes;
+use dembly_docker::{
+    atomic_replace, prepare_atomic_replace, AtomicReplacement, ManagedFields, ManagedMount,
+};
 use dembly_runtime::{
     render_runtime_config, RuntimeBind, RuntimeCard, RuntimeCheck, RuntimeConfig, RuntimeExport,
     RuntimeHook, RuntimeUserSpec,
@@ -11,12 +14,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 pub const LOCK_DIGEST_LABEL: &str = "io.dembly.lock-digest";
+pub const RUNTIME_PLAN_DIGEST_LABEL: &str = "io.dembly.runtime-plan-digest";
+pub const RUNTIME_BINARY_DIGEST_LABEL: &str = "io.dembly.runtime-binary-digest";
 
 pub struct ApplyArtifacts {
     runtime_path: PathBuf,
     runtime_bytes: Vec<u8>,
     binary_path: PathBuf,
     binary_bytes: Vec<u8>,
+    runtime_digest: String,
+    binary_digest: String,
     volume_directories: Vec<PathBuf>,
     gitignore_path: PathBuf,
     gitignore_bytes: Vec<u8>,
@@ -103,6 +110,12 @@ pub fn build_runtime_config(plan: &HostPlan, lock_digest: &str) -> RuntimeConfig
             spec: plan.intended_user_spec().into(),
         },
         cards,
+        volume_targets: plan
+            .deck
+            .volumes
+            .iter()
+            .map(|volume| volume.target.clone())
+            .collect(),
         binds,
         exports,
         hooks,
@@ -116,6 +129,8 @@ pub fn build_managed_fields(
     plan: &HostPlan,
     runtime_path: &Path,
     lock_digest: &str,
+    runtime_digest: &str,
+    binary_digest: &str,
 ) -> ManagedFields {
     let service = &plan.deck.document.compose.service;
     let runtime_root = runtime_path.parent().unwrap_or(&plan.deck.root);
@@ -165,7 +180,11 @@ pub fn build_managed_fields(
         command: Value::Sequence(Vec::new()),
         user: string("root"),
         privileged: Value::Bool(true),
-        labels: BTreeMap::from([(LOCK_DIGEST_LABEL.into(), string(lock_digest))]),
+        labels: BTreeMap::from([
+            (LOCK_DIGEST_LABEL.into(), string(lock_digest)),
+            (RUNTIME_PLAN_DIGEST_LABEL.into(), string(runtime_digest)),
+            (RUNTIME_BINARY_DIGEST_LABEL.into(), string(binary_digest)),
+        ]),
         mounts,
     }
 }
@@ -189,6 +208,8 @@ impl ApplyArtifacts {
                 executable.display()
             ))
         })?;
+        let runtime_digest = artifact_digest(&runtime_bytes);
+        let binary_digest = artifact_digest(&binary_bytes);
         let gitignore_path = plan
             .deck
             .root
@@ -224,6 +245,8 @@ impl ApplyArtifacts {
             runtime_bytes,
             binary_path: runtime_root.join("bin/dembly"),
             binary_bytes,
+            runtime_digest,
+            binary_digest,
             volume_directories,
             gitignore_path,
             gitignore_bytes,
@@ -235,60 +258,135 @@ impl ApplyArtifacts {
         &self.runtime_path
     }
 
+    pub fn runtime_digest(&self) -> &str {
+        &self.runtime_digest
+    }
+
+    pub fn binary_digest(&self) -> &str {
+        &self.binary_digest
+    }
+
     pub fn write(self, compose_path: &Path, compose_bytes: &[u8]) -> Result<(), CliError> {
         let runtime_root = self
             .runtime_path
             .parent()
             .expect("runtime plan always has a parent");
-        create_directory_path(&self.deck_root, runtime_root)?;
-        create_directory_path(
+        let mut created_directories = Vec::new();
+        if let Err(error) =
+            create_directory_path(&self.deck_root, runtime_root, &mut created_directories)
+        {
+            remove_created_directories(&created_directories);
+            return Err(error);
+        }
+        if let Err(error) = create_directory_path(
             &self.deck_root,
             self.binary_path
                 .parent()
                 .expect("Runtime binary always has a parent"),
-        )?;
+            &mut created_directories,
+        ) {
+            remove_created_directories(&created_directories);
+            return Err(error);
+        }
         let mut writer = NativeApplyWriter {
             deck_root: &self.deck_root,
+            staged: Vec::new(),
+            snapshots: BTreeMap::new(),
+            created_directories,
+            finished: false,
         };
         write_apply_targets(&self, compose_path, compose_bytes, &mut writer)
     }
+}
+
+pub fn artifact_digest(bytes: &[u8]) -> String {
+    format!("sha256:{}", sha256_bytes(bytes))
 }
 
 trait ApplyWriter {
     fn replace(&mut self, path: &Path, bytes: &[u8]) -> Result<(), CliError>;
     fn make_executable(&mut self, path: &Path) -> Result<(), CliError>;
     fn create_volume_directory(&mut self, path: &Path) -> Result<(), CliError>;
+    fn finish(&mut self) -> Result<(), CliError>;
 }
 
 struct NativeApplyWriter<'a> {
     deck_root: &'a Path,
+    staged: Vec<AtomicReplacement>,
+    snapshots: BTreeMap<PathBuf, FileSnapshot>,
+    created_directories: Vec<PathBuf>,
+    finished: bool,
+}
+
+enum FileSnapshot {
+    Missing,
+    File {
+        bytes: Vec<u8>,
+        permissions: fs::Permissions,
+    },
+    Other,
 }
 
 impl ApplyWriter for NativeApplyWriter<'_> {
     fn replace(&mut self, path: &Path, bytes: &[u8]) -> Result<(), CliError> {
-        atomic_replace(path, bytes).map_err(CliError::new)
+        if !self.snapshots.contains_key(path) {
+            self.snapshots.insert(path.into(), snapshot_file(path)?);
+        }
+        let replacement = prepare_atomic_replace(path, bytes).map_err(CliError::new)?;
+        self.staged.push(replacement);
+        Ok(())
     }
 
     fn make_executable(&mut self, path: &Path) -> Result<(), CliError> {
-        let mut permissions = fs::metadata(path)
-            .map_err(|error| {
+        let replacement = self
+            .staged
+            .iter()
+            .rev()
+            .find(|replacement| replacement.target() == path)
+            .ok_or_else(|| {
                 CliError::new(format!(
-                    "cannot inspect Runtime binary {}: {error}",
+                    "Runtime binary was not staged before permission update: {}",
                     path.display()
                 ))
-            })?
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).map_err(|error| {
-            CliError::new(format!(
-                "cannot make Runtime binary {} executable: {error}",
-                path.display()
-            ))
-        })
+            })?;
+        replacement
+            .set_permissions(fs::Permissions::from_mode(0o755))
+            .map_err(CliError::new)
     }
 
     fn create_volume_directory(&mut self, path: &Path) -> Result<(), CliError> {
-        create_directory_path(self.deck_root, path)
+        create_directory_path(self.deck_root, path, &mut self.created_directories)
+    }
+
+    fn finish(&mut self) -> Result<(), CliError> {
+        let mut committed = Vec::new();
+        while !self.staged.is_empty() {
+            let replacement = self.staged.remove(0);
+            let target = replacement.target().to_path_buf();
+            let result = replacement.commit().map_err(CliError::new);
+            committed.push(target);
+            if let Err(commit_error) = result {
+                let rollback = rollback_files(&committed, &self.snapshots);
+                remove_created_directories(&self.created_directories);
+                self.finished = true;
+                return match rollback {
+                    Ok(()) => Err(commit_error),
+                    Err(rollback_error) => Err(CliError::new(format!(
+                        "{commit_error}; apply rollback failed: {rollback_error}"
+                    ))),
+                };
+            }
+        }
+        self.finished = true;
+        Ok(())
+    }
+}
+
+impl Drop for NativeApplyWriter<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            remove_created_directories(&self.created_directories);
+        }
     }
 }
 
@@ -305,7 +403,63 @@ fn write_apply_targets(
         writer.create_volume_directory(directory)?;
     }
     writer.replace(&artifacts.gitignore_path, &artifacts.gitignore_bytes)?;
-    writer.replace(compose_path, compose_bytes)
+    writer.replace(compose_path, compose_bytes)?;
+    writer.finish()
+}
+
+fn snapshot_file(path: &Path) -> Result<FileSnapshot, CliError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(FileSnapshot::File {
+            bytes: fs::read(path).map_err(|error| {
+                CliError::new(format!("cannot snapshot {}: {error}", path.display()))
+            })?,
+            permissions: metadata.permissions(),
+        }),
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(CliError::new(format!(
+            "apply target must not be a symlink: {}",
+            path.display()
+        ))),
+        Ok(_) => Ok(FileSnapshot::Other),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(FileSnapshot::Missing),
+        Err(error) => Err(CliError::new(format!(
+            "cannot inspect apply target {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+fn rollback_files(
+    committed: &[PathBuf],
+    snapshots: &BTreeMap<PathBuf, FileSnapshot>,
+) -> Result<(), CliError> {
+    for path in committed.iter().rev() {
+        match snapshots
+            .get(path)
+            .expect("every staged apply target has a snapshot")
+        {
+            FileSnapshot::Missing => match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(CliError::new(format!(
+                        "cannot remove new apply target {}: {error}",
+                        path.display()
+                    )))
+                }
+            },
+            FileSnapshot::File { bytes, permissions } => {
+                atomic_replace(path, bytes).map_err(CliError::new)?;
+                fs::set_permissions(path, permissions.clone()).map_err(|error| {
+                    CliError::new(format!(
+                        "cannot restore permissions on {}: {error}",
+                        path.display()
+                    ))
+                })?;
+            }
+            FileSnapshot::Other => {}
+        }
+    }
+    Ok(())
 }
 
 fn managed_mount(source: impl AsRef<Path>, target: &str, mode: &str) -> ManagedMount {
@@ -379,14 +533,18 @@ fn validate_directory_path(root: &Path, target: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-fn create_directory_path(root: &Path, target: &Path) -> Result<(), CliError> {
+fn create_directory_path(
+    root: &Path,
+    target: &Path,
+    created_directories: &mut Vec<PathBuf>,
+) -> Result<(), CliError> {
     validate_directory_path(root, target)?;
     let relative = target.strip_prefix(root).expect("path validated above");
     let mut current = root.to_path_buf();
     for component in relative.components() {
         current.push(component);
         match fs::create_dir(&current) {
-            Ok(()) => {}
+            Ok(()) => created_directories.push(current.clone()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 let metadata = fs::symlink_metadata(&current).map_err(|error| {
                     CliError::new(format!("cannot inspect {}: {error}", current.display()))
@@ -409,10 +567,18 @@ fn create_directory_path(root: &Path, target: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
+fn remove_created_directories(directories: &[PathBuf]) {
+    for directory in directories.iter().rev() {
+        let _ = fs::remove_dir(directory);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{write_apply_targets, ApplyArtifacts, ApplyWriter};
     use crate::CliError;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
     #[derive(Debug, Eq, PartialEq)]
@@ -442,6 +608,10 @@ mod tests {
             self.events.push(WriteEvent::Volume(path.into()));
             Ok(())
         }
+
+        fn finish(&mut self) -> Result<(), CliError> {
+            Ok(())
+        }
     }
 
     #[test]
@@ -451,6 +621,8 @@ mod tests {
             runtime_bytes: b"runtime".to_vec(),
             binary_path: PathBuf::from("/deck/.dembly/runtime/bin/dembly"),
             binary_bytes: b"binary".to_vec(),
+            runtime_digest: "sha256:runtime".into(),
+            binary_digest: "sha256:binary".into(),
             volume_directories: vec![
                 PathBuf::from("/deck/.dembly/volumes/cache"),
                 PathBuf::from("/deck/.dembly/volumes/tool/private"),
@@ -480,6 +652,63 @@ mod tests {
                 WriteEvent::Replace(PathBuf::from("/deck/.gitignore")),
                 WriteEvent::Replace(PathBuf::from("/deck/compose.yaml")),
             ]
+        );
+    }
+
+    #[test]
+    fn late_compose_failure_restores_every_artifact_and_new_volume_directory() {
+        let root =
+            std::env::temp_dir().join(format!("dembly-apply-transaction-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let deck_root = root.join(".dembly");
+        let runtime_path = deck_root.join("runtime/dev.toml");
+        let binary_path = deck_root.join("runtime/bin/dembly");
+        let gitignore_path = root.join(".gitignore");
+        let existing_volume = deck_root.join("volumes/existing");
+        let new_volume = deck_root.join("volumes/new");
+        let compose_path = root.join("compose.yaml");
+        fs::create_dir_all(binary_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(&existing_volume).unwrap();
+        fs::create_dir_all(&compose_path).unwrap();
+        fs::write(compose_path.join("old-compose-marker"), b"old compose").unwrap();
+        fs::write(&runtime_path, b"old runtime").unwrap();
+        fs::write(&binary_path, b"old binary").unwrap();
+        let mut permissions = fs::metadata(&binary_path).unwrap().permissions();
+        permissions.set_mode(0o744);
+        fs::set_permissions(&binary_path, permissions).unwrap();
+        fs::write(&gitignore_path, b"old ignore").unwrap();
+        fs::write(existing_volume.join("marker"), b"persistent").unwrap();
+        let artifacts = ApplyArtifacts {
+            runtime_path: runtime_path.clone(),
+            runtime_bytes: b"new runtime".to_vec(),
+            binary_path: binary_path.clone(),
+            binary_bytes: b"new binary".to_vec(),
+            runtime_digest: "sha256:new-runtime".into(),
+            binary_digest: "sha256:new-binary".into(),
+            volume_directories: vec![existing_volume.clone(), new_volume.clone()],
+            gitignore_path: gitignore_path.clone(),
+            gitignore_bytes: b"new ignore".to_vec(),
+            deck_root,
+        };
+
+        let error = artifacts.write(&compose_path, b"new compose").unwrap_err();
+
+        assert!(error.to_string().contains("compose.yaml"), "{error}");
+        assert_eq!(fs::read(&runtime_path).unwrap(), b"old runtime");
+        assert_eq!(fs::read(&binary_path).unwrap(), b"old binary");
+        assert_eq!(
+            fs::metadata(&binary_path).unwrap().permissions().mode() & 0o777,
+            0o744
+        );
+        assert_eq!(fs::read(&gitignore_path).unwrap(), b"old ignore");
+        assert_eq!(
+            fs::read(existing_volume.join("marker")).unwrap(),
+            b"persistent"
+        );
+        assert!(!new_volume.exists());
+        assert_eq!(
+            fs::read(compose_path.join("old-compose-marker")).unwrap(),
+            b"old compose"
         );
     }
 }

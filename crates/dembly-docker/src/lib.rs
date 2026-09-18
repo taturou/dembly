@@ -6,7 +6,7 @@ mod compose_config;
 mod devcontainer;
 mod managed_compose;
 
-pub use atomic_write::atomic_replace;
+pub use atomic_write::{atomic_create, atomic_replace, prepare_atomic_replace, AtomicReplacement};
 
 pub use client::{image_identity, inspect_compose, inspect_image, ImageConfig};
 pub use compose_config::EffectiveService;

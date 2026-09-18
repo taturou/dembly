@@ -1,6 +1,6 @@
 use crate::commands::validate::write_warnings;
 use dembly_cli::{CliError, HostContext, HostPlan};
-use dembly_core::{sha256_file, CardIdentity, LockInput};
+use dembly_core::{sha256_file, CardIdentity, LockInput, ResolvedDeck};
 use dembly_docker::atomic_replace;
 use std::io::Write;
 
@@ -36,8 +36,14 @@ pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError
 }
 
 pub(crate) fn resolved_lock(plan: &HostPlan) -> Result<LockInput, CliError> {
-    let cards = plan
-        .deck
+    resolved_lock_from_deck(&plan.deck, plan.image.id.clone())
+}
+
+pub(crate) fn resolved_lock_from_deck(
+    deck: &ResolvedDeck,
+    image: String,
+) -> Result<LockInput, CliError> {
+    let cards = deck
         .cards
         .iter()
         .map(|card| {
@@ -51,9 +57,9 @@ pub(crate) fn resolved_lock(plan: &HostPlan) -> Result<LockInput, CliError> {
         })
         .collect::<Result<Vec<_>, CliError>>()?;
     Ok(LockInput {
-        compose_path: plan.deck.compose_path.display().to_string(),
-        service: plan.deck.document.compose.service.clone(),
-        image: plan.image.id.clone(),
+        compose_path: deck.compose_path.display().to_string(),
+        service: deck.document.compose.service.clone(),
+        image,
         cards,
     })
 }

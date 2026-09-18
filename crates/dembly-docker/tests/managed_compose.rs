@@ -1,5 +1,6 @@
 use dembly_docker::{
-    atomic_replace, CardLock, DemblyLock, ManagedCompose, ManagedFields, ManagedMount, ManagedValue,
+    atomic_create, atomic_replace, CardLock, DemblyLock, ManagedCompose, ManagedFields,
+    ManagedMount, ManagedValue,
 };
 use serde_yaml::{Mapping, Value};
 use std::collections::BTreeMap;
@@ -407,6 +408,19 @@ fn atomic_replace_preserves_permissions_and_replaces_all_bytes() {
         .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
         .count();
     assert_eq!(leftovers, 0);
+}
+
+#[test]
+fn atomic_create_publishes_complete_bytes_and_refuses_to_replace_existing_file() {
+    let fixture = Fixture::new("atomic-create", "compose");
+    let path = fixture.root.join("config.toml");
+
+    atomic_create(&path, b"complete config\n").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"complete config\n");
+
+    let error = atomic_create(&path, b"replacement\n").unwrap_err();
+    assert!(error.contains("config.toml"), "{error}");
+    assert_eq!(fs::read(&path).unwrap(), b"complete config\n");
 }
 
 #[test]

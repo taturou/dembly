@@ -1,19 +1,20 @@
-use crate::commands::lock::resolved_lock;
-use crate::commands::validate::write_warnings;
-use dembly_cli::{CliError, HostContext, HostPlan};
+use crate::commands::lock::{resolved_lock, resolved_lock_from_deck};
+use dembly_cli::artifacts::{
+    artifact_digest, LOCK_DIGEST_LABEL, RUNTIME_BINARY_DIGEST_LABEL, RUNTIME_PLAN_DIGEST_LABEL,
+};
+use dembly_cli::{CheckHostPlan, CliError, HostContext, HostPlan};
 use dembly_core::LockInput;
-use dembly_runtime::load_runtime_config;
+use dembly_runtime::{load_runtime_config, render_runtime_config};
 use serde_yaml::Value;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
-
-const LOCK_DIGEST_LABEL: &str = "io.dembly.lock-digest";
 
 pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError> {
-    let plan = HostPlan::resolve(&context.config_path)?;
-    write_warnings(&plan);
-    let lock = require_current_lock(&plan)?;
+    let plan = CheckHostPlan::resolve(&context.config_path)?;
+    for warning in &plan.deck.warnings {
+        eprintln!("warning: {warning}");
+    }
+    let lock = require_current_static_lock(&plan)?;
     let digest = lock.digest();
     let state = plan
         .managed_compose
@@ -21,8 +22,8 @@ pub fn run(context: &HostContext, output: &mut dyn Write) -> Result<(), CliError
         .map_err(|error| CliError::new(error.to_string()))?
         .ok_or_else(|| CliError::new("Dembly applied state is missing; run dembly apply"))?;
     require_current_lock_generation(&state, &digest)?;
-    static_applied_state(&plan)?;
-    validate_runtime_artifacts(&plan, &digest)?;
+    static_applied_compose(&plan.managed_compose, &plan.deck.document.compose.service)?;
+    validate_runtime_artifacts(&plan, &state, &digest)?;
 
     writeln!(output, "host integrity: valid")
         .and_then(|()| writeln!(output, "Card checks are not run by Host check."))
@@ -64,8 +65,15 @@ fn require_current_lock_generation(
 }
 
 pub(crate) fn static_applied_state(plan: &HostPlan) -> Result<(), CliError> {
-    plan.managed_compose
-        .validate_applied_state(&plan.deck.document.compose.service)
+    static_applied_compose(&plan.managed_compose, &plan.deck.document.compose.service)
+}
+
+fn static_applied_compose(
+    managed_compose: &dembly_docker::ManagedCompose,
+    service: &str,
+) -> Result<(), CliError> {
+    managed_compose
+        .validate_applied_state(service)
         .map_err(|error| CliError::new(error.to_string()))
 }
 
@@ -75,10 +83,6 @@ pub(crate) fn lock_status(plan: &HostPlan) -> &'static str {
         Ok(None) => "missing",
         Err(_) => "stale",
     }
-}
-
-fn require_current_lock(plan: &HostPlan) -> Result<LockInput, CliError> {
-    current_lock(plan)?.ok_or_else(|| CliError::new("Dembly Lock is missing; run dembly lock"))
 }
 
 fn current_lock(plan: &HostPlan) -> Result<Option<LockInput>, CliError> {
@@ -97,10 +101,33 @@ fn current_lock(plan: &HostPlan) -> Result<Option<LockInput>, CliError> {
     }
 }
 
-fn validate_runtime_artifacts(plan: &HostPlan, lock_digest: &str) -> Result<(), CliError> {
+fn require_current_static_lock(plan: &CheckHostPlan) -> Result<LockInput, CliError> {
+    let lock = plan
+        .managed_compose
+        .lock()
+        .map_err(|error| CliError::new(error.to_string()))?
+        .ok_or_else(|| CliError::new("Dembly Lock is missing; run dembly lock"))?;
+    let expected = resolved_lock_from_deck(&plan.deck, lock.image.clone())?;
+    if lock != expected {
+        return Err(CliError::new("Dembly Lock is stale; run dembly lock"));
+    }
+    Ok(lock)
+}
+
+fn validate_runtime_artifacts(
+    plan: &CheckHostPlan,
+    state: &dembly_docker::ApplyState,
+    lock_digest: &str,
+) -> Result<(), CliError> {
     let runtime_root = plan.deck.root.join("runtime");
     let service = &plan.deck.document.compose.service;
     let runtime_path = runtime_root.join(format!("{service}.toml"));
+    let runtime_bytes = std::fs::read(&runtime_path).map_err(|error| {
+        CliError::new(format!(
+            "cannot read Runtime plan {}: {error}",
+            runtime_path.display()
+        ))
+    })?;
     let runtime = load_runtime_config(&runtime_path).map_err(CliError::new)?;
     if runtime.lock_digest != lock_digest {
         return Err(CliError::new(format!(
@@ -108,32 +135,19 @@ fn validate_runtime_artifacts(plan: &HostPlan, lock_digest: &str) -> Result<(), 
             runtime_path.display()
         )));
     }
-    if runtime.runtime_user.spec != plan.intended_user_spec() {
+    let canonical = render_runtime_config(&runtime).map_err(CliError::new)?;
+    if canonical.as_bytes() != runtime_bytes {
         return Err(CliError::new(format!(
-            "runtime plan {} user does not match the intended user",
+            "Runtime plan {} is not in canonical form",
             runtime_path.display()
         )));
     }
-    let expected_cards = plan
-        .deck
-        .cards
-        .iter()
-        .map(|card| {
-            (
-                &card.document.name,
-                PathBuf::from(&card.document.mount.target),
-            )
-        })
-        .collect::<Vec<_>>();
-    let actual_cards = runtime
-        .cards
-        .iter()
-        .map(|card| (&card.name, card.mount_target.clone()))
-        .collect::<Vec<_>>();
-    if actual_cards != expected_cards {
+    let expected_runtime_digest = applied_label(state, RUNTIME_PLAN_DIGEST_LABEL)?;
+    let actual_runtime_digest = artifact_digest(&runtime_bytes);
+    if actual_runtime_digest != expected_runtime_digest {
         return Err(CliError::new(format!(
-            "runtime plan {} Cards do not match the resolved Deck",
-            runtime_path.display()
+            "Runtime plan digest does not match applied artifact identity: {}",
+            runtime_path.display(),
         )));
     }
 
@@ -150,10 +164,38 @@ fn validate_runtime_artifacts(plan: &HostPlan, lock_digest: &str) -> Result<(), 
             binary.display()
         )));
     }
+    let expected_binary_digest = applied_label(state, RUNTIME_BINARY_DIGEST_LABEL)?;
+    let actual_binary_digest = dembly_core::sha256_file(&binary)
+        .map(|digest| format!("sha256:{digest}"))
+        .map_err(|error| CliError::new(error.to_string()))?;
+    if actual_binary_digest != expected_binary_digest {
+        return Err(CliError::new(format!(
+            "Runtime binary digest does not match applied artifact identity: {}",
+            binary.display()
+        )));
+    }
     Ok(())
 }
 
-fn runtime_check_command(plan: &HostPlan) -> String {
+fn applied_label<'a>(
+    state: &'a dembly_docker::ApplyState,
+    label: &str,
+) -> Result<&'a str, CliError> {
+    match state
+        .fields
+        .labels
+        .entries
+        .get(label)
+        .map(|entry| &entry.applied)
+    {
+        Some(dembly_docker::ManagedValue::Present(Value::String(value))) => Ok(value),
+        _ => Err(CliError::new(format!(
+            "Dembly managed label {label} is missing or invalid in applied state"
+        ))),
+    }
+}
+
+fn runtime_check_command(plan: &CheckHostPlan) -> String {
     let compose = plan
         .compose_files
         .iter()
