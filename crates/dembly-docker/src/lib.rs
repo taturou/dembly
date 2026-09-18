@@ -9,13 +9,8 @@ mod managed_compose;
 
 pub use atomic_write::atomic_replace;
 
-pub use client::{
-    compose_service_config, compose_service_container, compose_service_exists,
-    compose_service_image, compose_status, container_label, docker_status, docker_status_quiet,
-    exec_in_container, image_identity, inspect_image, probe_image_user, run_docker, ImageConfig,
-    ProbedUser,
-};
-pub use compose_config::ComposeServiceConfig;
+pub use client::{image_identity, inspect_compose, inspect_image, ImageConfig};
+pub use compose_config::EffectiveService;
 pub use devcontainer::{
     load_devcontainer, validate_devcontainer, DevContainerCommand, DevContainerCommandArguments,
     DevContainerDocument,
