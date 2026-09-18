@@ -1,4 +1,4 @@
-use crate::args::{CliError, HostContext};
+use dembly_cli::{CliError, HostContext};
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, Write};

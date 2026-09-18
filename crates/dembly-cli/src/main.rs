@@ -1,7 +1,6 @@
-mod args;
 mod commands;
 
-use args::{parse_host_command, CliError, HostCommand};
+use dembly_cli::{parse_host_command, CliError, HostCommand};
 use std::io::{self, BufRead, Write};
 use std::os::unix::process::CommandExt;
 use std::process::ExitCode;
